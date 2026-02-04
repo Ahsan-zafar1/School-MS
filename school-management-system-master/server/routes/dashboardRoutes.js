@@ -283,44 +283,49 @@ router.get('/', protect, async (req, res) => {
       last6Months.push(existing || { month: monthName, revenue: 0 });
     }
     
-    // Get attendance data for the last 7 days
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const sevenDaysAgo = new Date(today);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
+    // Get today's attendance using SAME logic as /api/attendance/today-stats (UTC day)
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const tomorrowUTC = new Date(todayUTC);
+    tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
+
+    const todayRecords = await Attendance.find({
+      date: { $gte: todayUTC, $lt: tomorrowUTC }
+    }).lean();
+
+    const todayPresent = todayRecords.filter(r => (r.status || '').toLowerCase() === 'present').length;
+    const todayAbsent = todayRecords.filter(r => (r.status || '').toLowerCase() === 'absent').length;
+    const todayAttendance = { present: todayPresent, absent: todayAbsent };
+
+    // Get attendance for last 7 days for chart (also use UTC for consistency)
+    const sevenDaysAgoUTC = new Date(todayUTC);
+    sevenDaysAgoUTC.setUTCDate(sevenDaysAgoUTC.getUTCDate() - 6);
+
     const attendanceData = await Attendance.find({
-      date: { $gte: sevenDaysAgo, $lte: today }
+      date: { $gte: sevenDaysAgoUTC, $lt: tomorrowUTC }
     }).sort({ date: 1 }).lean();
-    
-    // Process attendance data for chart - group by day of week
-    const attendanceByDay = {};
+
+    const attendanceByDate = {};
     attendanceData.forEach(record => {
-      const date = new Date(record.date);
-      const dayName = date.toLocaleDateString('en-US', { weekday: 'short' });
-      
-      if (!attendanceByDay[dayName]) {
-        attendanceByDay[dayName] = { present: 0, absent: 0 };
+      const d = new Date(record.date);
+      const dateKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      if (!attendanceByDate[dateKey]) {
+        attendanceByDate[dateKey] = { present: 0, absent: 0 };
       }
-      
-      if (record.status === 'present' || record.status === 'Present') {
-        attendanceByDay[dayName].present++;
-      } else if (record.status === 'absent' || record.status === 'Absent') {
-        attendanceByDay[dayName].absent++;
-      }
+      const status = (record.status || '').toLowerCase();
+      if (status === 'present') attendanceByDate[dateKey].present++;
+      else if (status === 'absent') attendanceByDate[dateKey].absent++;
     });
-    
-    // Format attendance data for chart - last 7 days
-    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    const shortMonth = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const attendanceDataFormatted = [];
-    
     for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      const dayName = date.toLocaleDateString('en-US', { weekday: 'short' });
-      const dayData = attendanceByDay[dayName] || { present: 0, absent: 0 };
+      const d = new Date(todayUTC);
+      d.setUTCDate(d.getUTCDate() - i);
+      const dateKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      const dayData = attendanceByDate[dateKey] || { present: 0, absent: 0 };
       attendanceDataFormatted.push({
-        date: dayName,
+        date: `${shortMonth[d.getUTCMonth()]} ${d.getUTCDate()}`,
         present: dayData.present,
         absent: dayData.absent
       });
@@ -359,6 +364,10 @@ router.get('/', protect, async (req, res) => {
           labels: attendanceDataFormatted.map(d => d.date),
           present: attendanceDataFormatted.map(d => d.present),
           absent: attendanceDataFormatted.map(d => d.absent)
+        },
+        todayAttendance: {
+          present: todayAttendance.present,
+          absent: todayAttendance.absent
         },
         recentActivities: formattedActivities
       }

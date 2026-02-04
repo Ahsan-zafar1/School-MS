@@ -23,7 +23,9 @@ import {
   Bell,
   Shield,
   CheckCircle,
-  XCircle
+  XCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
@@ -101,9 +103,13 @@ interface Settings {
     enableIDCardGeneration: boolean;
     enableReportCardGeneration: boolean;
   };
+  portalPermissions?: {
+    studentPortal?: { showProfile?: boolean; showFees?: boolean; showExams?: boolean; showResults?: boolean; showAttendance?: boolean; showNotifications?: boolean };
+    teacherPortal?: { showProfile?: boolean; showClasses?: boolean; showAttendance?: boolean; showExams?: boolean; showNotifications?: boolean };
+  };
 }
 
-type TabType = 'school' | 'academic' | 'system' | 'email' | 'sms' | 'users' | 'backup' | 'features';
+type TabType = 'school' | 'academic' | 'system' | 'email' | 'sms' | 'users' | 'backup' | 'features' | 'portal';
 
 const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('school');
@@ -113,7 +119,12 @@ const Settings: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
-  const { refreshSettings } = useSettings();
+  const { refreshSettings, formatDate } = useSettings();
+  const [resetPasswordUser, setResetPasswordUser] = useState<{ _id: string; name: string } | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [showAddUserPassword, setShowAddUserPassword] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<Settings>();
 
@@ -128,7 +139,11 @@ const Settings: React.FC = () => {
       const response = await api.get('/api/settings');
       const fetchedSettings = response.data.data;
       setSettings(fetchedSettings);
-      reset(fetchedSettings);
+      const defaultPortal = {
+        studentPortal: { showProfile: true, showFees: true, showExams: true, showResults: true, showAttendance: true, showNotifications: true, ...fetchedSettings?.portalPermissions?.studentPortal },
+        teacherPortal: { showProfile: true, showClasses: true, showAttendance: true, showExams: true, showNotifications: true, ...fetchedSettings?.portalPermissions?.teacherPortal },
+      };
+      reset({ ...fetchedSettings, portalPermissions: defaultPortal });
     } catch (error: any) {
       console.error('Error fetching settings:', error);
       toast.error('Failed to load settings');
@@ -181,6 +196,9 @@ const Settings: React.FC = () => {
           endpoint = '/api/settings/features';
           await api.put(endpoint, data.features);
           break;
+        case 'portal':
+          await api.put('/api/settings', { portalPermissions: data.portalPermissions || {} });
+          break;
         default:
           await api.put(endpoint, data);
       }
@@ -198,13 +216,42 @@ const Settings: React.FC = () => {
 
   const handleCreateUser = async (userData: any) => {
     try {
-      await api.post('/api/auth/register', userData);
-      toast.success('User created successfully!');
+      if (editingUser?._id) {
+        await api.put(`/api/users/${editingUser._id}`, {
+          name: userData.name,
+          email: userData.email,
+          role: userData.role,
+        });
+        toast.success('User updated successfully!');
+      } else {
+        await api.post('/api/users', userData);
+        toast.success('User created successfully!');
+      }
       setShowUserModal(false);
       setEditingUser(null);
+      setShowAddUserPassword(false);
       fetchUsers();
     } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Failed to create user');
+      toast.error(error.response?.data?.message || 'Failed to save user');
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetPasswordUser || !newPassword.trim() || newPassword.length < 6) {
+      toast.error('Password must be at least 6 characters');
+      return;
+    }
+    try {
+      setResettingPassword(true);
+      await api.put(`/api/users/${resetPasswordUser._id}/reset-password`, { newPassword: newPassword.trim() });
+      toast.success('Password updated successfully!');
+      setResetPasswordUser(null);
+      setNewPassword('');
+      setShowResetPassword(false);
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Failed to reset password');
+    } finally {
+      setResettingPassword(false);
     }
   };
 
@@ -239,6 +286,7 @@ const Settings: React.FC = () => {
     { id: 'users' as TabType, label: 'Users', icon: Users },
     { id: 'backup' as TabType, label: 'Backup', icon: Database },
     { id: 'features' as TabType, label: 'Features', icon: Shield },
+    { id: 'portal' as TabType, label: 'Portal Permissions', icon: User },
   ];
 
   if (loading) {
@@ -808,6 +856,57 @@ const Settings: React.FC = () => {
               </div>
             )}
 
+            {/* Portal Permissions Tab - what students/teachers can see */}
+            {activeTab === 'portal' && (
+              <div className="space-y-8">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Student Portal</h3>
+                  <p className="text-sm text-gray-500 mb-4">Control what students can see on their dashboard and sidebar.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {[
+                      { key: 'showProfile', label: 'My Profile' },
+                      { key: 'showFees', label: 'My Fees' },
+                      { key: 'showExams', label: 'My Exams' },
+                      { key: 'showResults', label: 'My Results' },
+                      { key: 'showAttendance', label: 'My Attendance' },
+                      { key: 'showNotifications', label: 'Notifications' },
+                    ].map(({ key, label }) => (
+                      <div key={key} className="flex items-center justify-between p-4 border rounded-lg">
+                        <label className="text-sm font-medium text-gray-900">{label}</label>
+                        <input
+                          {...register(`portalPermissions.studentPortal.${key}` as any)}
+                          type="checkbox"
+                          className="rounded border-gray-300"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Teacher Portal</h3>
+                  <p className="text-sm text-gray-500 mb-4">Control what teachers can see on their dashboard and sidebar.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {[
+                      { key: 'showProfile', label: 'My Profile' },
+                      { key: 'showClasses', label: 'My Classes' },
+                      { key: 'showAttendance', label: 'Attendance' },
+                      { key: 'showExams', label: 'Exams' },
+                      { key: 'showNotifications', label: 'Notifications' },
+                    ].map(({ key, label }) => (
+                      <div key={key} className="flex items-center justify-between p-4 border rounded-lg">
+                        <label className="text-sm font-medium text-gray-900">{label}</label>
+                        <input
+                          {...register(`portalPermissions.teacherPortal.${key}` as any)}
+                          type="checkbox"
+                          className="rounded border-gray-300"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Features Tab */}
             {activeTab === 'features' && (
               <div className="space-y-6">
@@ -909,33 +1008,67 @@ const Settings: React.FC = () => {
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <thead className="bg-gray-50 dark:bg-gray-700/50">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Email</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Role</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Updated</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Password</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                    <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                       {users.map((user) => (
-                        <tr key={user._id || user.id}>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        <tr key={user._id || user.id} className="dark:bg-gray-800">
+                          <td className="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-600 dark:text-gray-400" title={user._id}>
+                            {(user._id || user.id || '').toString().slice(-8)}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
                             {user.name || user.username}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                             {user.email}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
                               {user.role}
                             </span>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                            {user.createdAt ? formatDate(user.createdAt) : '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                            {user.updatedAt ? formatDate(user.updatedAt) : '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap text-sm">
+                            <span className="text-gray-400 dark:text-gray-500 font-mono">••••••</span>
                             <button
+                              type="button"
+                              onClick={() => setResetPasswordUser({ _id: user._id || user.id, name: user.name || user.username })}
+                              className="ml-2 text-xs text-purple-600 dark:text-purple-400 hover:underline"
+                            >
+                              Reset
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap text-sm font-medium space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingUser(user);
+                                setShowUserModal(true);
+                              }}
+                              className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-300"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleDeleteUser(user._id || user.id)}
-                              className="text-red-600 hover:text-red-900"
+                              className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"
                             >
                               Delete
                             </button>
@@ -1021,14 +1154,25 @@ const Settings: React.FC = () => {
 
                 {!editingUser && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Password *</label>
-                    <input
-                      name="password"
-                      type="password"
-                      required
-                      className="input-field"
-                      placeholder="Enter password"
-                    />
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Password *</label>
+                    <div className="relative">
+                      <input
+                        name="password"
+                        type={showAddUserPassword ? 'text' : 'password'}
+                        required
+                        className="input-field pr-10"
+                        placeholder="Enter password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowAddUserPassword((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                        title={showAddUserPassword ? 'Hide password' : 'Show password'}
+                        tabIndex={-1}
+                      >
+                        {showAddUserPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1053,6 +1197,7 @@ const Settings: React.FC = () => {
                     onClick={() => {
                       setShowUserModal(false);
                       setEditingUser(null);
+                      setShowAddUserPassword(false);
                     }}
                     className="btn-secondary"
                   >
@@ -1066,6 +1211,57 @@ const Settings: React.FC = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Modal */}
+      {resetPasswordUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+            <h2 className="text-xl font-bold mb-2 text-gray-900 dark:text-gray-100">Reset Password</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">Set a new password for <strong>{resetPasswordUser.name}</strong>.</p>
+            <div className="relative mb-4">
+              <input
+                type={showResetPassword ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="New password (min 6 characters)"
+                className="input-field w-full pr-10"
+                minLength={6}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => setShowResetPassword((prev) => !prev)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                title={showResetPassword ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
+              >
+                {showResetPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+              </button>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setResetPasswordUser(null);
+                  setNewPassword('');
+                  setShowResetPassword(false);
+                }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleResetPassword}
+                disabled={resettingPassword || newPassword.length < 6}
+                className="btn-primary"
+              >
+                {resettingPassword ? 'Updating...' : 'Update Password'}
+              </button>
             </div>
           </div>
         </div>

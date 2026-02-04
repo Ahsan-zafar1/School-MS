@@ -78,11 +78,11 @@ router.post('/register', register);
  */
 router.get('/verify', protect, async (req, res) => {
   try {
-    // If middleware passes, token is valid
+    // If middleware passes, token is valid (return _id for consistency with login response)
     res.json({
       success: true,
       user: {
-        id: req.user._id,
+        _id: req.user._id.toString(),
         name: req.user.name,
         email: req.user.email,
         role: req.user.role

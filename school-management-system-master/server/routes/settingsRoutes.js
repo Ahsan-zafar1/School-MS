@@ -13,7 +13,10 @@ const {
 } = require('../controllers/settingsController');
 const { protect, authorize } = require('../middleware/auth');
 
-// All routes require authentication and admin role
+// GET settings: any authenticated user (students/teachers need it for portal)
+router.get('/', protect, getSettings);
+
+// All write operations require admin
 router.use(protect);
 router.use(authorize('admin'));
 
@@ -21,7 +24,7 @@ router.use(authorize('admin'));
  * @swagger
  * /api/settings:
  *   get:
- *     summary: Get system settings
+ *     summary: Get system settings (any authenticated user)
  *     tags: [Settings]
  *     security:
  *       - bearerAuth: []
@@ -29,7 +32,6 @@ router.use(authorize('admin'));
  *       200:
  *         description: Settings retrieved successfully
  */
-router.get('/', getSettings);
 
 /**
  * @swagger

@@ -27,12 +27,15 @@ import { useTheme } from '../contexts/ThemeContext';
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
-  const { getSchoolName } = useSettings();
+  const { getSchoolName, getStudentPortalPermissions, getTeacherPortalPermissions } = useSettings();
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
 
-  const navigation = [
+  const studentPerms = getStudentPortalPermissions();
+  const teacherPerms = getTeacherPortalPermissions();
+
+  const adminNavigation = [
     { name: 'Dashboard', href: '/', icon: Home },
     { name: 'Students', href: '/students', icon: Users },
     { name: 'Teachers', href: '/teachers', icon: GraduationCap },
@@ -44,6 +47,33 @@ const Layout: React.FC = () => {
     { name: 'Reports', href: '/reports', icon: BarChart3 },
     { name: 'Settings', href: '/settings', icon: Settings },
   ];
+
+  const studentNavigation = [
+    ...(true ? [{ name: 'Dashboard', href: '/', icon: Home }] : []),
+    ...(studentPerms.showProfile !== false ? [{ name: 'My Profile', href: '/my/profile', icon: User }] : []),
+    ...(studentPerms.showFees !== false ? [{ name: 'My Fees', href: '/my/fees', icon: DollarSign }] : []),
+    ...(studentPerms.showExams !== false ? [{ name: 'My Exams', href: '/my/exams', icon: FileText }] : []),
+    ...(studentPerms.showResults !== false ? [{ name: 'My Results', href: '/my/results', icon: BarChart3 }] : []),
+    ...(studentPerms.showAttendance !== false ? [{ name: 'My Attendance', href: '/my/attendance', icon: Calendar }] : []),
+    ...(studentPerms.showNotifications !== false ? [{ name: 'Notifications', href: '/my/notifications', icon: Bell }] : []),
+  ];
+
+  const teacherNavigation = [
+    { name: 'Dashboard', href: '/', icon: Home },
+    ...(teacherPerms.showProfile !== false ? [{ name: 'My Profile', href: '/my/profile', icon: User }] : []),
+    ...(teacherPerms.showClasses !== false ? [{ name: 'My Classes', href: '/my/classes', icon: BookOpen }] : []),
+    ...(teacherPerms.showAttendance !== false ? [{ name: 'Attendance', href: '/my/attendance', icon: Calendar }] : []),
+    ...(teacherPerms.showExams !== false ? [{ name: 'Exams', href: '/my/exams', icon: FileText }] : []),
+    ...(teacherPerms.showNotifications !== false ? [{ name: 'Notifications', href: '/my/notifications', icon: Bell }] : []),
+  ];
+
+  const navigation = user?.role === 'admin'
+    ? adminNavigation
+    : user?.role === 'student'
+      ? studentNavigation
+      : user?.role === 'teacher'
+        ? teacherNavigation
+        : adminNavigation;
 
   const handleLogout = () => {
     logout();

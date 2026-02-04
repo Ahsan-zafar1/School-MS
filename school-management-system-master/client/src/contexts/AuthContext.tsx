@@ -59,18 +59,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const login = async (email: string, password: string) => {
     try {
       const response = await api.post('/api/auth/login', { email, password });
-      const { data } = response.data;
-      
-      localStorage.setItem('token', data.token);
+      const payload = response.data;
+      const data = payload?.data ?? payload;
+      const token = data?.token;
+      if (!token) throw new Error('No token received');
+      localStorage.setItem('token', token);
       setUser({
-        _id: data._id,
+        _id: data._id ?? data.id,
         name: data.name,
         email: data.email,
-        role: data.role,
+        role: data.role ?? 'student',
         isActive: true
       });
     } catch (error: any) {
-      throw new Error(error.response?.data?.message || 'Login failed');
+      const msg = error.response?.data?.message || error.message || 'Login failed';
+      throw new Error(msg);
     }
   };
 

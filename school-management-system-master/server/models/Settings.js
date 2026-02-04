@@ -229,11 +229,30 @@ const settingsSchema = new mongoose.Schema({
     }
   },
 
+  // Portal permissions: what students/teachers can see (admin-controlled)
+  portalPermissions: {
+    studentPortal: {
+      showProfile: { type: Boolean, default: true },
+      showFees: { type: Boolean, default: true },
+      showExams: { type: Boolean, default: true },
+      showResults: { type: Boolean, default: true },
+      showAttendance: { type: Boolean, default: true },
+      showNotifications: { type: Boolean, default: true }
+    },
+    teacherPortal: {
+      showProfile: { type: Boolean, default: true },
+      showClasses: { type: Boolean, default: true },
+      showAttendance: { type: Boolean, default: true },
+      showExams: { type: Boolean, default: true },
+      showNotifications: { type: Boolean, default: true }
+    }
+  },
+
   // Feature Toggles
   features: {
     enableStudentPortal: {
       type: Boolean,
-      default: false
+      default: true
     },
     enableParentPortal: {
       type: Boolean,

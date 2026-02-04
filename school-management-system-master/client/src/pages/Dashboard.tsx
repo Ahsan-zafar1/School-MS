@@ -43,6 +43,7 @@ interface DashboardStats {
     present: number;
     absent: number;
   }>;
+  todayAttendance?: { present: number; absent: number };
 }
 
 const Dashboard: React.FC = () => {
@@ -59,23 +60,25 @@ const Dashboard: React.FC = () => {
     try {
       setLoading(true);
       const response = await api.get('/api/dashboard');
-      const dashboardData = response.data.data || response.data;
-      
-      // Transform the response to match the expected format
+      const raw = response.data;
+      const dashboardData = raw?.data ?? raw ?? {};
+      const todayAtt = dashboardData.todayAttendance ?? { present: 0, absent: 0 };
+
       setStats({
-        totalStudents: dashboardData.summary?.totalStudents || 0,
-        totalTeachers: dashboardData.summary?.totalTeachers || 0,
-        totalClasses: dashboardData.summary?.totalClasses || 0,
-        totalRevenue: dashboardData.summary?.totalRevenue || 0,
-        studentGrowth: dashboardData.growth?.studentGrowth || 0,
-        teacherGrowth: dashboardData.growth?.teacherGrowth || 0,
-        recentActivities: dashboardData.recentActivities || [],
-        monthlyRevenue: dashboardData.monthlyRevenue || [],
-        attendanceData: dashboardData.attendance?.labels?.map((date: string, index: number) => ({
+        totalStudents: dashboardData.summary?.totalStudents ?? 0,
+        totalTeachers: dashboardData.summary?.totalTeachers ?? 0,
+        totalClasses: dashboardData.summary?.totalClasses ?? 0,
+        totalRevenue: dashboardData.summary?.totalRevenue ?? 0,
+        studentGrowth: dashboardData.growth?.studentGrowth ?? 0,
+        teacherGrowth: dashboardData.growth?.teacherGrowth ?? 0,
+        recentActivities: dashboardData.recentActivities ?? [],
+        monthlyRevenue: dashboardData.monthlyRevenue ?? [],
+        attendanceData: (dashboardData.attendance?.labels ?? []).map((date: string, index: number) => ({
           date,
-          present: dashboardData.attendance?.present?.[index] || 0,
-          absent: dashboardData.attendance?.absent?.[index] || 0
-        })) || []
+          present: dashboardData.attendance?.present?.[index] ?? 0,
+          absent: dashboardData.attendance?.absent?.[index] ?? 0
+        })),
+        todayAttendance: { present: todayAtt.present ?? 0, absent: todayAtt.absent ?? 0 }
       });
     } catch (error: any) {
       console.error('Error fetching dashboard stats:', error);
@@ -90,7 +93,8 @@ const Dashboard: React.FC = () => {
         teacherGrowth: 0,
         recentActivities: [],
         monthlyRevenue: [],
-        attendanceData: []
+        attendanceData: [],
+        todayAttendance: { present: 0, absent: 0 }
       });
     } finally {
       setLoading(false);
@@ -140,7 +144,7 @@ const Dashboard: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Stats Cards - Colorful Design */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         {/* Schools Card - Pink */}
         <div className="bg-gradient-to-br from-pink-500 to-pink-600 rounded-xl shadow-lg p-6 text-white">
           <div className="flex items-center justify-between">
@@ -149,6 +153,22 @@ const Dashboard: React.FC = () => {
               <p className="text-3xl font-bold">{stats.totalClasses}</p>
             </div>
             <Building2 className="h-12 w-12 text-pink-200 opacity-80" />
+          </div>
+        </div>
+
+        {/* Today's Attendance Card - Teal (always visible) */}
+        <div className="bg-gradient-to-br from-teal-500 to-teal-600 rounded-xl shadow-lg p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-teal-100 text-sm font-medium mb-1">Today's Attendance</p>
+              <p className="text-2xl font-bold">
+                <span className="text-teal-100">P: </span>{stats.todayAttendance?.present ?? 0}
+                <span className="text-teal-200 mx-1">|</span>
+                <span className="text-teal-100">A: </span>{stats.todayAttendance?.absent ?? 0}
+              </p>
+              <p className="text-xs text-teal-200 mt-0.5">Present | Absent</p>
+            </div>
+            <UserCheck className="h-12 w-12 text-teal-200 opacity-80" />
           </div>
         </div>
 
@@ -254,26 +274,24 @@ const Dashboard: React.FC = () => {
             ))}
           </div>
 
-          {/* Attendance Summary */}
-          {stats.attendanceData.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Today's Attendance</p>
-              <div className="flex gap-4">
-                <div className="flex-1 bg-green-50 dark:bg-green-900/30 rounded-lg p-3">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Present</p>
-                  <p className="text-lg font-semibold text-green-700 dark:text-green-400">
-                    {stats.attendanceData[stats.attendanceData.length - 1]?.present || 0}
-                  </p>
-                </div>
-                <div className="flex-1 bg-red-50 dark:bg-red-900/30 rounded-lg p-3">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Absent</p>
-                  <p className="text-lg font-semibold text-red-700 dark:text-red-400">
-                    {stats.attendanceData[stats.attendanceData.length - 1]?.absent || 0}
-                  </p>
-                </div>
+          {/* Today's Attendance - always shown in calendar widget */}
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Today's Attendance</p>
+            <div className="flex gap-4">
+              <div className="flex-1 bg-green-50 dark:bg-green-900/30 rounded-lg p-3">
+                <p className="text-xs text-gray-600 dark:text-gray-400">Present</p>
+                <p className="text-lg font-semibold text-green-700 dark:text-green-400">
+                  {Number(stats.todayAttendance?.present ?? stats.attendanceData[stats.attendanceData.length - 1]?.present ?? 0)}
+                </p>
+              </div>
+              <div className="flex-1 bg-red-50 dark:bg-red-900/30 rounded-lg p-3">
+                <p className="text-xs text-gray-600 dark:text-gray-400">Absent</p>
+                <p className="text-lg font-semibold text-red-700 dark:text-red-400">
+                  {Number(stats.todayAttendance?.absent ?? stats.attendanceData[stats.attendanceData.length - 1]?.absent ?? 0)}
+                </p>
               </div>
             </div>
-          )}
+          </div>
         </div>
 
         {/* School Performance Chart */}

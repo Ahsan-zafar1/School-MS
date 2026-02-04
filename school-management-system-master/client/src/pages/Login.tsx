@@ -124,9 +124,12 @@ const Login: React.FC = () => {
             </button>
           </div>
 
-          <div className="text-center">
+          <div className="text-center space-y-1">
             <p className="text-sm text-gray-600">
-              Demo credentials: admin@school.com / admin123
+              Admin: admin@school.com / admin123
+            </p>
+            <p className="text-sm text-gray-600">
+              Student: student@school.com / student123
             </p>
           </div>
         </form>

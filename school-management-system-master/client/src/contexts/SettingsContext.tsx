@@ -45,6 +45,23 @@ interface SystemSettings {
   enableSMSNotifications: boolean;
 }
 
+export interface StudentPortalPermissions {
+  showProfile?: boolean;
+  showFees?: boolean;
+  showExams?: boolean;
+  showResults?: boolean;
+  showAttendance?: boolean;
+  showNotifications?: boolean;
+}
+
+export interface TeacherPortalPermissions {
+  showProfile?: boolean;
+  showClasses?: boolean;
+  showAttendance?: boolean;
+  showExams?: boolean;
+  showNotifications?: boolean;
+}
+
 interface Settings {
   _id?: string;
   schoolInfo: SchoolInfo;
@@ -54,6 +71,10 @@ interface Settings {
   smsSettings?: any;
   backupSettings?: any;
   features?: any;
+  portalPermissions?: {
+    studentPortal?: StudentPortalPermissions;
+    teacherPortal?: TeacherPortalPermissions;
+  };
 }
 
 interface SettingsContextType {
@@ -67,6 +88,8 @@ interface SettingsContextType {
   getPassingPercentage: () => number;
   getAttendancePercentage: () => number;
   getItemsPerPage: () => number;
+  getStudentPortalPermissions: () => StudentPortalPermissions;
+  getTeacherPortalPermissions: () => TeacherPortalPermissions;
 }
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
@@ -214,6 +237,27 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     return settings?.systemSettings?.itemsPerPage || 10;
   };
 
+  const getStudentPortalPermissions = (): StudentPortalPermissions => {
+    return settings?.portalPermissions?.studentPortal ?? {
+      showProfile: true,
+      showFees: true,
+      showExams: true,
+      showResults: true,
+      showAttendance: true,
+      showNotifications: true,
+    };
+  };
+
+  const getTeacherPortalPermissions = (): TeacherPortalPermissions => {
+    return settings?.portalPermissions?.teacherPortal ?? {
+      showProfile: true,
+      showClasses: true,
+      showAttendance: true,
+      showExams: true,
+      showNotifications: true,
+    };
+  };
+
   const refreshSettings = async () => {
     await fetchSettings();
   };
@@ -229,6 +273,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     getPassingPercentage,
     getAttendancePercentage,
     getItemsPerPage,
+    getStudentPortalPermissions,
+    getTeacherPortalPermissions,
   };
 
   return (

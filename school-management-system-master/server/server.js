@@ -117,6 +117,7 @@ const examRoutes = require('./routes/examRoutes');
 const examMarkRoutes = require('./routes/examMarkRoutes');
 const academicYearRoutes = require('./routes/academicYearRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
+const meRoutes = require('./routes/meRoutes');
 
 // Use routes
 app.use('/api/auth', authRoutes);
@@ -137,6 +138,7 @@ app.use('/api/exams', examRoutes);
 app.use('/api/exam-marks', examMarkRoutes);
 app.use('/api/academic-years', academicYearRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/me', meRoutes);
 
 // Activity logging middleware
 app.use((req, res, next) => {

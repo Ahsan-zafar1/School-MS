@@ -47,6 +47,16 @@ exports.updateSettings = asyncHandler(async (req, res) => {
     if (req.body.features) {
       settings.features = { ...settings.features, ...req.body.features };
     }
+    if (req.body.portalPermissions) {
+      if (req.body.portalPermissions.studentPortal) {
+        settings.portalPermissions = settings.portalPermissions || {};
+        settings.portalPermissions.studentPortal = { ...(settings.portalPermissions.studentPortal || {}), ...req.body.portalPermissions.studentPortal };
+      }
+      if (req.body.portalPermissions.teacherPortal) {
+        settings.portalPermissions = settings.portalPermissions || {};
+        settings.portalPermissions.teacherPortal = { ...(settings.portalPermissions.teacherPortal || {}), ...req.body.portalPermissions.teacherPortal };
+      }
+    }
     
     await settings.save();
   }
