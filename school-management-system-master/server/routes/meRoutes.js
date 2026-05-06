@@ -1,29 +1,38 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
-const Student = require('../models/Student');
-const Teacher = require('../models/Teacher');
+const { getLinkedStudent, getLinkedTeacher } = require('../helpers/meHelpers');
+const {
+  getTeacherDashboard,
+  getTeacherClasses,
+  getTeacherStudents,
+  getTeacherSchedule,
+  getTeacherAttendanceForClass,
+  markTeacherAttendance,
+  getTeacherAttendanceRecords,
+  exportTeacherAttendance,
+  getTeacherExams,
+  getTeacherExamMarks,
+  createTeacherExamMark,
+  updateTeacherExamMark,
+  getTeacherAnalytics,
+  getMyAnnouncements,
+  createAnnouncement,
+  updateAnnouncement,
+  deleteAnnouncement
+} = require('../controllers/meController');
 const Fee = require('../models/Fee');
 const ExamMark = require('../models/ExamMark');
 const Attendance = require('../models/Attendance');
 const Exam = require('../models/Exam');
-
-// Resolve linked Student or Teacher by logged-in user email
-const getLinkedStudent = async (email) => {
-  if (!email) return null;
-  return Student.findOne({ email: email.toLowerCase(), isActive: true }).lean();
-};
-const getLinkedTeacher = async (email) => {
-  if (!email) return null;
-  return Teacher.findOne({ email: email.toLowerCase(), isActive: true }).lean();
-};
 
 // All /api/me routes require authentication
 router.use(protect);
 
 /**
  * GET /api/me/profile
- * Returns the current user's linked Student or Teacher record (by email).
+ * Returns the current user's linked Student or Teacher record.
+ * Uses user.student / user.teacher ObjectId if set; otherwise fallback to email lookup.
  * Admin gets 403 for this endpoint (use admin panels instead).
  */
 router.get('/profile', async (req, res) => {
@@ -33,14 +42,14 @@ router.get('/profile', async (req, res) => {
       return res.status(403).json({ success: false, message: 'Admins use the main dashboard.' });
     }
     if (role === 'student') {
-      const student = await getLinkedStudent(email);
+      const student = await getLinkedStudent(req.user);
       if (!student) {
         return res.status(404).json({ success: false, message: 'No student record linked to this account.' });
       }
       return res.json({ success: true, data: student });
     }
     if (role === 'teacher') {
-      const teacher = await getLinkedTeacher(email);
+      const teacher = await getLinkedTeacher(req.user);
       if (!teacher) {
         return res.status(404).json({ success: false, message: 'No teacher record linked to this account.' });
       }
@@ -61,7 +70,7 @@ router.get('/fees', async (req, res) => {
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'Students only.' });
     }
-    const student = await getLinkedStudent(req.user.email);
+    const student = await getLinkedStudent(req.user);
     if (!student) {
       return res.status(404).json({ success: false, message: 'No student record linked.' });
     }
@@ -81,7 +90,7 @@ router.get('/results', async (req, res) => {
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'Students only.' });
     }
-    const student = await getLinkedStudent(req.user.email);
+    const student = await getLinkedStudent(req.user);
     if (!student) {
       return res.status(404).json({ success: false, message: 'No student record linked.' });
     }
@@ -104,7 +113,7 @@ router.get('/attendance', async (req, res) => {
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'Students only.' });
     }
-    const student = await getLinkedStudent(req.user.email);
+    const student = await getLinkedStudent(req.user);
     if (!student) {
       return res.status(404).json({ success: false, message: 'No student record linked.' });
     }
@@ -121,14 +130,17 @@ router.get('/attendance', async (req, res) => {
 
 /**
  * GET /api/me/dashboard
- * Student only: summary for student portal dashboard (fees status, attendance summary, recent results).
+ * Student: summary (fees, attendance, results). Teacher: summary (profile, classes count, students count).
  */
 router.get('/dashboard', async (req, res) => {
   try {
+    if (req.user.role === 'teacher') {
+      return getTeacherDashboard(req, res);
+    }
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'Students only.' });
     }
-    const student = await getLinkedStudent(req.user.email);
+    const student = await getLinkedStudent(req.user);
     if (!student) {
       return res.status(404).json({ success: false, message: 'No student record linked.' });
     }
@@ -195,14 +207,17 @@ router.get('/dashboard', async (req, res) => {
 
 /**
  * GET /api/me/exams
- * Student only: list exams (e.g. for their class) - simplified: recent exams from exam marks.
+ * Student: exams from their marks. Teacher: exams for their classes.
  */
 router.get('/exams', async (req, res) => {
   try {
+    if (req.user.role === 'teacher') {
+      return getTeacherExams(req, res);
+    }
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'Students only.' });
     }
-    const student = await getLinkedStudent(req.user.email);
+    const student = await getLinkedStudent(req.user);
     if (!student) {
       return res.status(404).json({ success: false, message: 'No student record linked.' });
     }
@@ -216,6 +231,83 @@ router.get('/exams', async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
+});
+
+/**
+ * GET /api/me/classes
+ * Teacher only: classes where teacher is classTeacher or in subjects.teacher or in teacher.classes.
+ */
+router.get('/classes', async (req, res) => {
+  if (req.user.role !== 'teacher') {
+    return res.status(403).json({ success: false, message: 'Teachers only.' });
+  }
+  return getTeacherClasses(req, res);
+});
+
+/**
+ * GET /api/me/students
+ * Teacher only: students in classes taught by this teacher.
+ */
+router.get('/students', async (req, res) => {
+  if (req.user.role !== 'teacher') {
+    return res.status(403).json({ success: false, message: 'Teachers only.' });
+  }
+  return getTeacherStudents(req, res);
+});
+
+// ---------- Teacher: schedule, attendance, exam-marks, analytics ----------
+router.get('/schedule', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return getTeacherSchedule(req, res);
+});
+
+router.get('/attendance/class', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return getTeacherAttendanceForClass(req, res);
+});
+router.get('/attendance/export', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return exportTeacherAttendance(req, res);
+});
+router.get('/attendance/records', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return getTeacherAttendanceRecords(req, res);
+});
+router.post('/attendance/mark', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return markTeacherAttendance(req, res);
+});
+
+router.get('/exam-marks', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return getTeacherExamMarks(req, res);
+});
+router.post('/exam-marks', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return createTeacherExamMark(req, res);
+});
+router.put('/exam-marks/:id', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return updateTeacherExamMark(req, res);
+});
+
+router.get('/analytics', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return getTeacherAnalytics(req, res);
+});
+
+router.get('/announcements', getMyAnnouncements);
+router.post('/announcements', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return createAnnouncement(req, res);
+});
+router.put('/announcements/:id', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return updateAnnouncement(req, res);
+});
+router.delete('/announcements/:id', (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teachers only.' });
+  return deleteAnnouncement(req, res);
 });
 
 module.exports = router;

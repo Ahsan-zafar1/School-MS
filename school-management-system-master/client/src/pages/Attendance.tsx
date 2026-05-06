@@ -36,6 +36,7 @@ import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { saveAs } from 'file-saver';
 import { useClasses } from '../hooks/useClasses';
+import IconActionButton from '../components/IconActionButton';
 
 interface Attendance {
   _id?: string;
@@ -918,6 +919,8 @@ const Attendance: React.FC = () => {
             </div>
           </button>
           <button
+            type="button"
+            title="Teacher attendance"
             onClick={() => {
               setActiveTab('teacher');
               setViewMode('mark');
@@ -940,6 +943,8 @@ const Attendance: React.FC = () => {
         {/* View Mode Toggle */}
         <div className="flex gap-2 border-b border-gray-200 pb-4">
           <button
+            type="button"
+            title="Mark attendance for the selected date and class"
             onClick={() => setViewMode('mark')}
             className={`px-4 py-2 rounded-lg font-medium transition-colors ${
               viewMode === 'mark'
@@ -953,6 +958,8 @@ const Attendance: React.FC = () => {
             </div>
           </button>
           <button
+            type="button"
+            title="View and manage attendance records in a table"
             onClick={() => setViewMode('table')}
             className={`px-4 py-2 rounded-lg font-medium transition-colors ${
               viewMode === 'table'
@@ -966,6 +973,8 @@ const Attendance: React.FC = () => {
             </div>
           </button>
           <button
+            type="button"
+            title="Calendar overview of attendance"
             onClick={() => setViewMode('calendar')}
             className={`px-4 py-2 rounded-lg font-medium transition-colors ${
               viewMode === 'calendar'
@@ -979,6 +988,8 @@ const Attendance: React.FC = () => {
             </div>
           </button>
           <button
+            type="button"
+            title="Attendance statistics dashboard"
             onClick={() => setViewMode('stats')}
             className={`px-4 py-2 rounded-lg font-medium transition-colors ${
               viewMode === 'stats'
@@ -1267,6 +1278,8 @@ const Attendance: React.FC = () => {
             
             <div className="flex gap-2 flex-wrap">
               <button
+                type="button"
+                title="Download attendance as Excel"
                 onClick={() => handleExport('excel')}
                 className="btn-secondary flex items-center gap-2"
               >
@@ -1274,13 +1287,15 @@ const Attendance: React.FC = () => {
                 Export Excel
               </button>
               <button
+                type="button"
+                title="Download attendance as CSV"
                 onClick={() => handleExport('csv')}
                 className="btn-secondary flex items-center gap-2"
               >
                 <Download className="h-4 w-4" />
                 Export CSV
               </button>
-              <label className="btn-secondary flex items-center gap-2 cursor-pointer">
+              <label title="Upload spreadsheet to import attendance" className="btn-secondary flex items-center gap-2 cursor-pointer">
                 <Upload className="h-4 w-4" />
                 Import
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleImport} className="hidden" />
@@ -1288,18 +1303,24 @@ const Attendance: React.FC = () => {
               {selectedAttendances.length > 0 && (
                 <>
                   <button
+                    type="button"
+                    title="Activate selected records"
                     onClick={handleBulkActivate}
                     className="btn-secondary flex items-center gap-2"
                   >
                     Activate ({selectedAttendances.length})
                   </button>
                   <button
+                    type="button"
+                    title="Deactivate selected records"
                     onClick={handleBulkDeactivate}
                     className="btn-secondary flex items-center gap-2"
                   >
                     Deactivate ({selectedAttendances.length})
                   </button>
                   <button
+                    type="button"
+                    title="Permanently delete selected records"
                     onClick={handleBulkDelete}
                     className="btn-danger flex items-center gap-2"
                   >
@@ -1330,7 +1351,12 @@ const Attendance: React.FC = () => {
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="px-6 py-3 text-left">
-                        <button onClick={handleSelectAll} className="text-gray-400 hover:text-gray-600">
+                        <button
+                          type="button"
+                          title={selectedAttendances.length === attendanceRecords.length ? 'Deselect all on this page' : 'Select all on this page'}
+                          onClick={handleSelectAll}
+                          className="text-gray-400 hover:text-gray-600"
+                        >
                           {selectedAttendances.length === attendanceRecords.length ? (
                             <CheckSquare className="h-5 w-5" />
                           ) : (
@@ -1446,33 +1472,33 @@ const Attendance: React.FC = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-right">
                           <div className="flex items-center justify-end space-x-2">
-                            <button
+                            <IconActionButton
                               onClick={() => {
                                 setPreviewAttendance(record);
                                 setShowPreviewModal(true);
                               }}
-                              className="text-blue-600 hover:text-blue-900"
-                              title="View"
+                              tooltip="View attendance details"
+                              className="text-blue-600 hover:text-blue-900 focus:ring-blue-300"
                             >
                               <Eye className="h-4 w-4" />
-                            </button>
-                            <button
+                            </IconActionButton>
+                            <IconActionButton
                               onClick={() => {
                                 setEditingAttendance(record);
                                 setShowEditModal(true);
                               }}
-                              className="text-primary-600 hover:text-primary-900"
-                              title="Edit"
+                              tooltip="Edit attendance"
+                              className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                             >
                               <Edit className="h-4 w-4" />
-                            </button>
-                            <button
+                            </IconActionButton>
+                            <IconActionButton
                               onClick={() => handleDelete(record._id!)}
-                              className="text-red-600 hover:text-red-900"
-                              title="Delete"
+                              tooltip="Delete attendance record"
+                              className="text-red-600 hover:text-red-900 focus:ring-red-300"
                             >
                               <Trash2 className="h-4 w-4" />
-                            </button>
+                            </IconActionButton>
                           </div>
                         </td>
                       </tr>
@@ -1484,6 +1510,8 @@ const Attendance: React.FC = () => {
                 <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
                   <div className="flex-1 flex justify-between sm:hidden">
                     <button
+                      type="button"
+                      title="Previous page"
                       onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                       disabled={currentPage === 1}
                       className="btn-secondary"
@@ -1491,6 +1519,8 @@ const Attendance: React.FC = () => {
                       Previous
                     </button>
                     <button
+                      type="button"
+                      title="Next page"
                       onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                       disabled={currentPage === totalPages}
                       className="btn-secondary"
@@ -1508,6 +1538,7 @@ const Attendance: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-2">
                       <select
+                        title="Rows per page"
                         value={itemsPerPage}
                         onChange={(e) => {
                           setItemsPerPage(Number(e.target.value));
@@ -1534,6 +1565,8 @@ const Attendance: React.FC = () => {
                           }
                           return (
                             <button
+                              type="button"
+                              title={`Go to page ${pageNum}`}
                               key={pageNum}
                               onClick={() => setCurrentPage(pageNum)}
                               className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
@@ -1786,9 +1819,14 @@ const Attendance: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Edit Attendance</h2>
-              <button onClick={() => { setShowEditModal(false); setEditingAttendance(null); }} className="text-gray-500 hover:text-gray-700">
+              <IconActionButton
+                onClick={() => { setShowEditModal(false); setEditingAttendance(null); }}
+                tooltip="Close dialog"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
                 <X className="h-6 w-6" />
-              </button>
+              </IconActionButton>
             </div>
             <div className="space-y-4">
               <div>
@@ -1846,9 +1884,14 @@ const Attendance: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Attendance Details</h2>
-              <button onClick={() => { setShowPreviewModal(false); setPreviewAttendance(null); }} className="text-gray-500 hover:text-gray-700">
+              <IconActionButton
+                onClick={() => { setShowPreviewModal(false); setPreviewAttendance(null); }}
+                tooltip="Close preview"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
                 <X className="h-6 w-6" />
-              </button>
+              </IconActionButton>
             </div>
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">

@@ -8,29 +8,33 @@ const generateToken = (id) => {
   });
 };
 
-// Register user
+// Register user – email or username (at least one required)
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
-
-    // Check if user exists
-    const userExists = await User.findOne({ email });
-    if (userExists) {
+    const { name, email, username, password, role } = req.body;
+    const em = (email || '').trim().toLowerCase() || null;
+    const un = (username || '').trim().toLowerCase() || null;
+    if (!em && !un) {
       return res.status(400).json({
         success: false,
-        message: 'User already exists'
+        message: 'Email or username is required'
       });
     }
+    if (em && (await User.findOne({ email: em }))) {
+      return res.status(400).json({ success: false, message: 'User with this email already exists' });
+    }
+    if (un && (await User.findOne({ username: un }))) {
+      return res.status(400).json({ success: false, message: 'User with this username already exists' });
+    }
 
-    // Create user
     const user = await User.create({
-      name,
-      email,
-      password,
-      role: role || 'student' // Default to student if no role provided
+      name: name || 'User',
+      email: em,
+      username: un,
+      password: password,
+      role: role || 'student'
     });
 
-    // Generate token
     const token = generateToken(user._id);
 
     res.status(201).json({
@@ -40,6 +44,7 @@ exports.register = async (req, res) => {
         _id: user._id,
         name: user.name,
         email: user.email,
+        username: user.username,
         role: user.role,
         token
       }
@@ -53,20 +58,31 @@ exports.register = async (req, res) => {
   }
 };
 
-// Login user
+// Login user – by email OR username (for users without email)
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const normalizedEmail = (email || '').trim().toLowerCase();
-    if (!normalizedEmail || !password) {
+    const { email, username, password } = req.body;
+    if (!password) {
       return res.status(400).json({
         success: false,
-        message: 'Email and password are required'
+        message: 'Password is required'
+      });
+    }
+    const byEmail = (email || '').trim().toLowerCase();
+    const byUsername = (username || '').trim().toLowerCase();
+    if (!byEmail && !byUsername) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email or username is required'
       });
     }
 
-    // Check if user exists (email stored as lowercase in User model)
-    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    let user = null;
+    if (byEmail) {
+      user = await User.findOne({ email: byEmail }).select('+password');
+    } else {
+      user = await User.findOne({ username: byUsername }).select('+password');
+    }
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -74,7 +90,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Check if password matches
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({
@@ -83,7 +98,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Generate token
     const token = generateToken(user._id);
 
     res.json({
@@ -93,6 +107,7 @@ exports.login = async (req, res) => {
         _id: user._id,
         name: user.name,
         email: user.email,
+        username: user.username,
         role: user.role,
         token
       }

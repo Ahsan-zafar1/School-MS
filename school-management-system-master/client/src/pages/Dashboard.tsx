@@ -149,7 +149,7 @@ const Dashboard: React.FC = () => {
         <div className="bg-gradient-to-br from-pink-500 to-pink-600 rounded-xl shadow-lg p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-pink-100 text-sm font-medium mb-1">Schools</p>
+              <p className="text-pink-100 text-sm font-medium mb-1">Total Classes</p>
               <p className="text-3xl font-bold">{stats.totalClasses}</p>
             </div>
             <Building2 className="h-12 w-12 text-pink-200 opacity-80" />

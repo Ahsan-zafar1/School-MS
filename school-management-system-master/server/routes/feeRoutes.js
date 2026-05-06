@@ -10,6 +10,7 @@ const fastcsv = require('fast-csv');
 const csvParser = require('csv-parser');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
+const { searchRegexFromQuery, pickSortField, FEE_LIST_SORT } = require('../utils/queryHelpers');
 
 // Ensure tmp directories exist
 const tmpCsvDir = path.join(__dirname, '..', 'tmp', 'csv');
@@ -65,7 +66,7 @@ router.get('/', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    const sortBy = req.query.sortBy || 'createdAt';
+    const sortBy = pickSortField(req.query.sortBy, FEE_LIST_SORT, 'createdAt');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
     
@@ -75,34 +76,35 @@ router.get('/', async (req, res) => {
     
     // Search filter - includes student fields
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      
-      // First, find students matching the search term (name, studentId, rollNumber)
-      const matchingStudents = await Student.find({
-        $or: [
-          { name: searchRegex },
-          { studentId: searchRegex },
-          { rollNumber: searchRegex }
-        ]
-      }).select('_id').lean();
-      
-      const studentIds = matchingStudents.map(s => s._id);
-      
-      // Build search conditions
-      const searchConditions = [
-        { feeId: searchRegex },
-        { description: searchRegex },
-        { transactionId: searchRegex }
-      ];
-      
-      // If we found matching students, add student ID search
-      if (studentIds.length > 0) {
-        searchConditions.push({ student: { $in: studentIds } });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        // First, find students matching the search term (name, studentId, rollNumber)
+        const matchingStudents = await Student.find({
+          $or: [
+            { name: searchRegex },
+            { studentId: searchRegex },
+            { rollNumber: searchRegex }
+          ]
+        }).select('_id').lean();
+
+        const studentIds = matchingStudents.map(s => s._id);
+
+        // Build search conditions
+        const searchConditions = [
+          { feeId: searchRegex },
+          { description: searchRegex },
+          { transactionId: searchRegex }
+        ];
+
+        // If we found matching students, add student ID search
+        if (studentIds.length > 0) {
+          searchConditions.push({ student: { $in: studentIds } });
+        }
+
+        andConditions.push({
+          $or: searchConditions
+        });
       }
-      
-      andConditions.push({
-        $or: searchConditions
-      });
     }
     
     // Specific filters
@@ -196,34 +198,35 @@ router.get('/grouped-by-month', protect, async (req, res) => {
     
     // Search filter - includes student fields
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      
-      // First, find students matching the search term (name, studentId, rollNumber)
-      const matchingStudents = await Student.find({
-        $or: [
-          { name: searchRegex },
-          { studentId: searchRegex },
-          { rollNumber: searchRegex }
-        ]
-      }).select('_id').lean();
-      
-      const studentIds = matchingStudents.map(s => s._id);
-      
-      // Build search conditions
-      const searchConditions = [
-        { feeId: searchRegex },
-        { description: searchRegex },
-        { transactionId: searchRegex }
-      ];
-      
-      // If we found matching students, add student ID search
-      if (studentIds.length > 0) {
-        searchConditions.push({ student: { $in: studentIds } });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        // First, find students matching the search term (name, studentId, rollNumber)
+        const matchingStudents = await Student.find({
+          $or: [
+            { name: searchRegex },
+            { studentId: searchRegex },
+            { rollNumber: searchRegex }
+          ]
+        }).select('_id').lean();
+
+        const studentIds = matchingStudents.map(s => s._id);
+
+        // Build search conditions
+        const searchConditions = [
+          { feeId: searchRegex },
+          { description: searchRegex },
+          { transactionId: searchRegex }
+        ];
+
+        // If we found matching students, add student ID search
+        if (studentIds.length > 0) {
+          searchConditions.push({ student: { $in: studentIds } });
+        }
+
+        andConditions.push({
+          $or: searchConditions
+        });
       }
-      
-      andConditions.push({
-        $or: searchConditions
-      });
     }
     
     if (req.query.class) filter.class = req.query.class;
@@ -403,34 +406,35 @@ router.get('/grouped-by-month', protect, async (req, res) => {
     
     // Search filter - includes student fields
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      
-      // First, find students matching the search term (name, studentId, rollNumber)
-      const matchingStudents = await Student.find({
-        $or: [
-          { name: searchRegex },
-          { studentId: searchRegex },
-          { rollNumber: searchRegex }
-        ]
-      }).select('_id').lean();
-      
-      const studentIds = matchingStudents.map(s => s._id);
-      
-      // Build search conditions
-      const searchConditions = [
-        { feeId: searchRegex },
-        { description: searchRegex },
-        { transactionId: searchRegex }
-      ];
-      
-      // If we found matching students, add student ID search
-      if (studentIds.length > 0) {
-        searchConditions.push({ student: { $in: studentIds } });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        // First, find students matching the search term (name, studentId, rollNumber)
+        const matchingStudents = await Student.find({
+          $or: [
+            { name: searchRegex },
+            { studentId: searchRegex },
+            { rollNumber: searchRegex }
+          ]
+        }).select('_id').lean();
+
+        const studentIds = matchingStudents.map(s => s._id);
+
+        // Build search conditions
+        const searchConditions = [
+          { feeId: searchRegex },
+          { description: searchRegex },
+          { transactionId: searchRegex }
+        ];
+
+        // If we found matching students, add student ID search
+        if (studentIds.length > 0) {
+          searchConditions.push({ student: { $in: studentIds } });
+        }
+
+        andConditions.push({
+          $or: searchConditions
+        });
       }
-      
-      andConditions.push({
-        $or: searchConditions
-      });
     }
     
     if (req.query.class) filter.class = req.query.class;
@@ -908,34 +912,35 @@ router.get('/export', async (req, res) => {
     const andConditions = [];
     
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      
-      // First, find students matching the search term (name, studentId, rollNumber)
-      const matchingStudents = await Student.find({
-        $or: [
-          { name: searchRegex },
-          { studentId: searchRegex },
-          { rollNumber: searchRegex }
-        ]
-      }).select('_id').lean();
-      
-      const studentIds = matchingStudents.map(s => s._id);
-      
-      // Build search conditions
-      const searchConditions = [
-        { feeId: searchRegex },
-        { description: searchRegex },
-        { transactionId: searchRegex }
-      ];
-      
-      // If we found matching students, add student ID search
-      if (studentIds.length > 0) {
-        searchConditions.push({ student: { $in: studentIds } });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        // First, find students matching the search term (name, studentId, rollNumber)
+        const matchingStudents = await Student.find({
+          $or: [
+            { name: searchRegex },
+            { studentId: searchRegex },
+            { rollNumber: searchRegex }
+          ]
+        }).select('_id').lean();
+
+        const studentIds = matchingStudents.map(s => s._id);
+
+        // Build search conditions
+        const searchConditions = [
+          { feeId: searchRegex },
+          { description: searchRegex },
+          { transactionId: searchRegex }
+        ];
+
+        // If we found matching students, add student ID search
+        if (studentIds.length > 0) {
+          searchConditions.push({ student: { $in: studentIds } });
+        }
+
+        andConditions.push({
+          $or: searchConditions
+        });
       }
-      
-      andConditions.push({
-        $or: searchConditions
-      });
     }
     
     if (req.query.student) filter.student = req.query.student;

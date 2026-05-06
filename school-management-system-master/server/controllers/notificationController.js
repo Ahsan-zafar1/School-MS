@@ -1,4 +1,5 @@
 const Fee = require('../models/Fee');
+const Notification = require('../models/Notification');
 const { sendFeeReminder, sendAdminFeeSummary } = require('../utils/emailService');
 
 const sendPendingFeeNotifications = async (req, res) => {
@@ -81,6 +82,137 @@ const sendPendingFeeNotifications = async (req, res) => {
   }
 };
 
+// --- In-app notifications (Notification model) ---
+
+const listMyNotifications = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const unreadOnly = req.query.unread === 'true' || req.query.unread === '1';
+    const query = { user: req.user._id };
+    if (unreadOnly) query.read = false;
+    const notifications = await Notification.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+    res.status(200).json({
+      success: true,
+      data: notifications,
+      count: notifications.length
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch notifications',
+      error: error.message
+    });
+  }
+};
+
+const createNotification = async (req, res) => {
+  try {
+    const { title, message, user: userId } = req.body;
+    if (!title || !message || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'title, message, and user are required'
+      });
+    }
+    const doc = await Notification.create({
+      title,
+      message,
+      user: userId,
+      read: false
+    });
+    res.status(201).json({
+      success: true,
+      data: doc.toObject ? doc.toObject() : doc
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create notification',
+      error: error.message
+    });
+  }
+};
+
+const createNotificationsForUsers = async (req, res) => {
+  try {
+    const { title, message, userIds } = req.body;
+    if (!title || !message || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'title, message, and userIds (array) are required'
+      });
+    }
+    const docs = await Notification.insertMany(
+      userIds.map(uid => ({ title, message, user: uid, read: false }))
+    );
+    res.status(201).json({
+      success: true,
+      data: docs,
+      count: docs.length
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create notifications',
+      error: error.message
+    });
+  }
+};
+
+const markNotificationRead = async (req, res) => {
+  try {
+    const notification = await Notification.findOne({
+      _id: req.params.id,
+      user: req.user._id
+    });
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found'
+      });
+    }
+    notification.read = true;
+    await notification.save();
+    res.status(200).json({
+      success: true,
+      data: notification.toObject ? notification.toObject() : notification
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update notification',
+      error: error.message
+    });
+  }
+};
+
+const markAllNotificationsRead = async (req, res) => {
+  try {
+    const result = await Notification.updateMany(
+      { user: req.user._id, read: false },
+      { $set: { read: true } }
+    );
+    res.status(200).json({
+      success: true,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark notifications as read',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
-  sendPendingFeeNotifications
+  sendPendingFeeNotifications,
+  listMyNotifications,
+  createNotification,
+  createNotificationsForUsers,
+  markNotificationRead,
+  markAllNotificationsRead
 }; 

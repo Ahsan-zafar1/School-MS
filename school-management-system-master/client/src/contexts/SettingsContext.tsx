@@ -111,6 +111,22 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   const [loading, setLoading] = useState(true);
 
   const fetchSettings = async () => {
+    // /api/settings requires auth; do not call before login (avoid 401 + reload loop on /login)
+    if (!localStorage.getItem('token')) {
+      const cached = localStorage.getItem('settings');
+      if (cached) {
+        try {
+          setSettings(JSON.parse(cached));
+        } catch {
+          setSettings(getDefaultSettings());
+        }
+      } else {
+        setSettings(getDefaultSettings());
+      }
+      setLoading(false);
+      return;
+    }
+
     try {
       const response = await api.get('/api/settings');
       const fetchedSettings = response.data.data;

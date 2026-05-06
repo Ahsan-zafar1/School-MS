@@ -1,6 +1,22 @@
 // Load environment variables
 require('dotenv').config();
 
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: JWT_SECRET is required in production. Set it in your .env file.');
+    process.exit(1);
+  }
+  process.env.JWT_SECRET = 'dev-insecure-jwt-secret-change-for-production';
+  console.warn('⚠️  JWT_SECRET not set; using a dev-only default. Set JWT_SECRET in .env for real use.');
+}
+
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err);
+});
+
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -13,6 +29,23 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Reject /api/* when MongoDB is not ready (clear 503 instead of random 500s in every module)
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api')) {
+    return next();
+  }
+  if (req.path.startsWith('/api/test')) {
+    return next();
+  }
+  if (mongoose.connection.readyState === 1) {
+    return next();
+  }
+  return res.status(503).json({
+    success: false,
+    message: 'Service unavailable: database not connected. Start MongoDB and check MONGODB_URI.',
+  });
+});
 
 // Serve static files from the uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -44,26 +77,54 @@ app.get('/', (req, res) => {
   res.json({ message: 'School Management System API is running' });
 });
 
-// MongoDB connection with retry and admin creation
+// MongoDB: register event listeners once — repeating them on every reconnect caused a
+// listener stack and reconnect storms, which can crash the process and reset port 9999.
+let dbEventListenersRegistered = false;
+let reconnectTimer = null;
+
+const scheduleDBReconnect = (delayMs = 5000) => {
+  if (reconnectTimer) {
+    return;
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectDB().catch((e) => console.error('DB reconnect error:', e.message));
+  }, delayMs);
+};
+
 const connectDB = async () => {
+  const mongoURI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/school-management';
+  const options = {
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+    family: 4,
+  };
+
+  if (!dbEventListenersRegistered) {
+    dbEventListenersRegistered = true;
+    mongoose.connection.on('error', (err) => {
+      console.error('MongoDB connection error:', err?.message || err);
+    });
+    mongoose.connection.on('disconnected', () => {
+      console.log('MongoDB disconnected. Scheduling reconnect...');
+      scheduleDBReconnect(5000);
+    });
+    mongoose.connection.on('connected', () => {
+      console.log('✅ MongoDB connection active');
+    });
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
   try {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/school-management';
     console.log('Attempting to connect to MongoDB at:', mongoURI);
-
-    const options = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-      family: 4, // Use IPv4
-    };
-
     await mongoose.connect(mongoURI, options);
     console.log('✅ MongoDB Connected Successfully');
     console.log('MongoDB connection state:', mongoose.connection.readyState);
     console.log('Connected to database:', mongoose.connection.name);
 
-    // Check and create admin user if doesn't exist
     const User = require('./models/User');
     const adminExists = await User.findOne({ email: 'admin@school.com' });
 
@@ -79,22 +140,27 @@ const connectDB = async () => {
       console.log('✅ Admin user created successfully');
     }
 
-    // Set up connection error handling
-    mongoose.connection.on('error', (err) => {
-      console.error('MongoDB connection error:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      console.log('MongoDB disconnected. Attempting to reconnect...');
-      setTimeout(connectDB, 5000);
-    });
-
-    mongoose.connection.on('connected', () => {
-      console.log('✅ MongoDB reconnected successfully');
-    });
+    const Subject = require('./models/Subject');
+    if ((await Subject.countDocuments()) === 0) {
+      const defaults = [
+        'Mathematics',
+        'Physics',
+        'Chemistry',
+        'Biology',
+        'English',
+        'History',
+        'Geography',
+        'Computer Science',
+        'Art',
+        'Music',
+        'Physical Education',
+      ];
+      await Subject.insertMany(defaults.map((name, i) => ({ name, sortOrder: i, isActive: true })));
+      console.log('✅ Default subjects created (manage under Subjects in the app)');
+    }
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err.message);
-    setTimeout(connectDB, 5000);
+    scheduleDBReconnect(5000);
   }
 };
 
@@ -118,6 +184,8 @@ const examMarkRoutes = require('./routes/examMarkRoutes');
 const academicYearRoutes = require('./routes/academicYearRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const meRoutes = require('./routes/meRoutes');
+const announcementRoutes = require('./routes/announcementRoutes');
+const subjectRoutes = require('./routes/subjectRoutes');
 
 // Use routes
 app.use('/api/auth', authRoutes);
@@ -139,6 +207,8 @@ app.use('/api/exam-marks', examMarkRoutes);
 app.use('/api/academic-years', academicYearRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/me', meRoutes);
+app.use('/api/announcements', announcementRoutes);
+app.use('/api/subjects', subjectRoutes);
 
 // Activity logging middleware
 app.use((req, res, next) => {
@@ -184,14 +254,36 @@ const startServer = async () => {
       console.log(`✅ Server running on port ${PORT}`);
       console.log(`✅ Test the API: http://localhost:${PORT}/api/test/test-db`);
     });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use. Stop the other Node process or set PORT in .env.`);
+      } else {
+        console.error('❌ HTTP server error:', err.message);
+      }
+      process.exit(1);
+    });
 
-    // Handle graceful shutdown
+    const shutdown = () => {
+      server.close(() => {
+        mongoose.connection
+          .close()
+          .then(() => {
+            console.log('Server and DB connection closed');
+            process.exit(0);
+          })
+          .catch((e) => {
+            console.error('Error closing MongoDB:', e);
+            process.exit(1);
+          });
+      });
+    };
     process.on('SIGTERM', () => {
       console.log('Received SIGTERM. Shutting down gracefully...');
-      server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-      });
+      shutdown();
+    });
+    process.on('SIGINT', () => {
+      console.log('Received SIGINT. Shutting down gracefully...');
+      shutdown();
     });
   } catch (error) {
     console.error('❌ Server startup error:', error);

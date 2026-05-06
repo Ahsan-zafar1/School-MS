@@ -26,11 +26,12 @@ import {
   Users,
   FileText
 } from 'lucide-react';
-import api from '../utils/api';
+import api, { getApiBaseUrl } from '../utils/api';
 import toast from 'react-hot-toast';
 import { saveAs } from 'file-saver';
 import { useClasses } from '../hooks/useClasses';
 import { useSettings } from '../contexts/SettingsContext';
+import IconActionButton from '../components/IconActionButton';
 
 interface Fee {
   _id: string;
@@ -681,7 +682,7 @@ const Fees: React.FC = () => {
   const handleGenerateFeeSlip = (feeId: string) => {
     try {
       const token = localStorage.getItem('token');
-      const url = `${api.defaults.baseURL}/api/fees/slip/${feeId}`;
+      const url = `${getApiBaseUrl()}/api/fees/slip/${feeId}`;
       
       fetch(url, {
         method: 'GET',
@@ -725,7 +726,7 @@ const Fees: React.FC = () => {
       if (filterStatus) params.append('status', filterStatus);
       if (filterAcademicYear) params.append('academicYear', filterAcademicYear);
       
-      const url = `${api.defaults.baseURL}/api/fees/slips/class/${filterClass}${params.toString() ? '?' + params.toString() : ''}`;
+      const url = `${getApiBaseUrl()}/api/fees/slips/class/${filterClass}${params.toString() ? '?' + params.toString() : ''}`;
       
       fetch(url, {
         method: 'GET',
@@ -765,7 +766,7 @@ const Fees: React.FC = () => {
       if (filterStatus) params.append('status', filterStatus);
       if (filterAcademicYear) params.append('academicYear', filterAcademicYear);
       
-      const url = `${api.defaults.baseURL}/api/fees/slips/bulk${params.toString() ? '?' + params.toString() : ''}`;
+      const url = `${getApiBaseUrl()}/api/fees/slips/bulk${params.toString() ? '?' + params.toString() : ''}`;
       
       fetch(url, {
         method: 'GET',
@@ -800,7 +801,7 @@ const Fees: React.FC = () => {
   const handleGenerateFeeHistory = (studentId: string) => {
     try {
       const token = localStorage.getItem('token');
-      const url = `${api.defaults.baseURL}/api/fees/slip/student/${studentId}/history`;
+      const url = `${getApiBaseUrl()}/api/fees/slip/student/${studentId}/history`;
       
       fetch(url, {
         method: 'GET',
@@ -841,6 +842,8 @@ const Fees: React.FC = () => {
         </div>
         <div className="flex gap-3">
           <button
+            type="button"
+            title="View fee statistics summary"
             onClick={fetchStats}
             className="btn-secondary flex items-center gap-2"
           >
@@ -848,6 +851,8 @@ const Fees: React.FC = () => {
             Statistics
           </button>
           <button
+            type="button"
+            title="Create fees for all students in a class"
             onClick={() => {
               bulkCreateForm.reset({
                 class: '',
@@ -866,6 +871,8 @@ const Fees: React.FC = () => {
             Bulk Create
           </button>
           <button
+            type="button"
+            title="Add a new fee record"
             onClick={() => {
               reset({
                 student: '',
@@ -896,9 +903,14 @@ const Fees: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Fee Statistics</h2>
-              <button onClick={() => setShowStats(false)} className="text-gray-500 hover:text-gray-700">
+              <IconActionButton
+                onClick={() => setShowStats(false)}
+                tooltip="Close statistics"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
                 <X className="h-6 w-6" />
-              </button>
+              </IconActionButton>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div className="bg-green-50 p-4 rounded-lg">
@@ -953,6 +965,8 @@ const Fees: React.FC = () => {
         <div className="flex justify-between items-center mb-4">
           <div className="flex gap-2">
             <button
+              type="button"
+              title="Show fees as a sortable table"
               onClick={() => setViewMode('table')}
               className={`px-4 py-2 rounded-lg transition-all ${
                 viewMode === 'table'
@@ -963,6 +977,8 @@ const Fees: React.FC = () => {
               Table View
             </button>
             <button
+              type="button"
+              title="Show fees grouped by month"
               onClick={() => setViewMode('monthly')}
               className={`px-4 py-2 rounded-lg transition-all ${
                 viewMode === 'monthly'
@@ -1060,6 +1076,8 @@ const Fees: React.FC = () => {
         {/* Import/Export Buttons */}
         <div className="flex flex-wrap gap-3 mb-4">
           <button
+            type="button"
+            title="Download fees as Excel"
             onClick={() => handleExport('excel')}
             className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
           >
@@ -1067,13 +1085,15 @@ const Fees: React.FC = () => {
             Export Excel
           </button>
           <button
+            type="button"
+            title="Download fees as CSV"
             onClick={() => handleExport('csv')}
             className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-600 text-white rounded-lg hover:from-blue-600 hover:to-cyan-700 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
           >
             <Download className="h-4 w-4" />
             Export CSV
           </button>
-          <label className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 cursor-pointer">
+          <label title="Upload spreadsheet to import fees" className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 cursor-pointer">
             <Upload className="h-4 w-4" />
             Import
             <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImport} />
@@ -1087,6 +1107,7 @@ const Fees: React.FC = () => {
             <span>Generate Fee Slips:</span>
           </div>
           <button
+            type="button"
             onClick={handleGenerateClassSlips}
             disabled={!filterClass}
             className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-lg hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
@@ -1096,6 +1117,7 @@ const Fees: React.FC = () => {
             Class Slips
           </button>
           <button
+            type="button"
             onClick={handleGenerateBulkSlips}
             className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
             title="Generate fee slips for all filtered fees"
@@ -1112,18 +1134,24 @@ const Fees: React.FC = () => {
               {selectedFees.length} fee(s) selected
             </span>
             <button
+              type="button"
+              title="Mark selected fees as active"
               onClick={() => handleBulkUpdate(true)}
               className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600"
             >
               Activate
             </button>
             <button
+              type="button"
+              title="Mark selected fees as inactive"
               onClick={() => handleBulkUpdate(false)}
               className="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600"
             >
               Deactivate
             </button>
             <button
+              type="button"
+              title="Permanently delete selected fees"
               onClick={handleBulkDelete}
               className="px-3 py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600"
             >
@@ -1181,6 +1209,7 @@ const Fees: React.FC = () => {
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fee ID</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Class</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fee Type</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
@@ -1194,6 +1223,9 @@ const Fees: React.FC = () => {
                         <tr key={fee._id} className="hover:bg-gray-50">
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                             {fee.feeId || 'N/A'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm font-medium text-gray-900">{fee.class}</div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900">{fee.student.name}</div>
@@ -1215,43 +1247,43 @@ const Fees: React.FC = () => {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <div className="flex items-center space-x-2 justify-end">
-                              <button
+                              <IconActionButton
                                 onClick={() => handlePreview(fee)}
-                                className="text-blue-600 hover:text-blue-900"
-                                title="View Profile"
+                                tooltip="View fee details"
+                                className="text-blue-600 hover:text-blue-900 focus:ring-blue-300"
                               >
                                 <Eye className="h-4 w-4" />
-                              </button>
-                              <button
+                              </IconActionButton>
+                              <IconActionButton
                                 onClick={() => handleGenerateFeeSlip(fee._id)}
-                                className="text-purple-600 hover:text-purple-900"
-                                title="Generate Fee Slip"
+                                tooltip="Generate Fee Slip"
+                                className="text-purple-600 hover:text-purple-900 focus:ring-purple-300"
                               >
                                 <FileText className="h-4 w-4" />
-                              </button>
-                              <button
+                              </IconActionButton>
+                              <IconActionButton
                                 onClick={() => handleGenerateFeeHistory(fee.student._id)}
-                                className="text-indigo-600 hover:text-indigo-900"
-                                title="Generate Complete Fee History"
+                                tooltip="Generate complete fee history (print)"
+                                className="text-indigo-600 hover:text-indigo-900 focus:ring-indigo-300"
                               >
                                 <Printer className="h-4 w-4" />
-                              </button>
+                              </IconActionButton>
                               {fee.status !== 'Paid' && (
-                                <button
+                                <IconActionButton
                                   onClick={() => handleRecordPayment(fee)}
-                                  className="text-green-600 hover:text-green-900"
-                                  title="Record Payment"
+                                  tooltip="Record Payment"
+                                  className="text-green-600 hover:text-green-900 focus:ring-green-300"
                                 >
                                   <CreditCard className="h-4 w-4" />
-                                </button>
+                                </IconActionButton>
                               )}
-                              <button
+                              <IconActionButton
                                 onClick={() => handleEdit(fee)}
-                                className="text-primary-600 hover:text-primary-900"
-                                title="Edit"
+                                tooltip="Edit Fee"
+                                className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                               >
                                 <Edit className="h-4 w-4" />
-                              </button>
+                              </IconActionButton>
                             </div>
                           </td>
                         </tr>
@@ -1285,7 +1317,12 @@ const Fees: React.FC = () => {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left">
-                    <button onClick={handleSelectAll} className="text-gray-400 hover:text-gray-600">
+                    <button
+                      type="button"
+                      title={selectedFees.length === fees.length ? 'Deselect all fees' : 'Select all fees on this page'}
+                      onClick={handleSelectAll}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
                       {selectedFees.length === fees.length ? (
                         <CheckSquare className="h-5 w-5" />
                       ) : (
@@ -1297,6 +1334,12 @@ const Fees: React.FC = () => {
                     <div className="flex items-center gap-1">
                       Fee ID
                       {getSortIcon('feeId')}
+                    </div>
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('class')}>
+                    <div className="flex items-center gap-1">
+                      Class
+                      {getSortIcon('class')}
                     </div>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('student')}>
@@ -1355,6 +1398,9 @@ const Fees: React.FC = () => {
                       <div className="text-sm font-medium text-gray-900">{fee.feeId || 'N/A'}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">{fee.class}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">{fee.student.name}</div>
                       <div className="text-sm text-gray-500">{fee.student.rollNumber}</div>
                     </td>
@@ -1388,36 +1434,36 @@ const Fees: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center space-x-2 justify-end">
-                        <button
+                        <IconActionButton
                           onClick={() => handlePreview(fee)}
-                          className="text-blue-600 hover:text-blue-900"
-                          title="View Profile"
+                          tooltip="View fee details"
+                          className="text-blue-600 hover:text-blue-900 focus:ring-blue-300"
                         >
                           <Eye className="h-4 w-4" />
-                        </button>
+                        </IconActionButton>
                         {fee.status !== 'Paid' && (
-                          <button
+                          <IconActionButton
                             onClick={() => handleRecordPayment(fee)}
-                            className="text-green-600 hover:text-green-900"
-                            title="Record Payment"
+                            tooltip="Record Payment"
+                            className="text-green-600 hover:text-green-900 focus:ring-green-300"
                           >
                             <CreditCard className="h-4 w-4" />
-                          </button>
+                          </IconActionButton>
                         )}
-                        <button
+                        <IconActionButton
                           onClick={() => handleEdit(fee)}
-                          className="text-primary-600 hover:text-primary-900"
-                          title="Edit"
+                          tooltip="Edit Fee"
+                          className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                         >
                           <Edit className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handleDelete(fee._id)}
-                          className="text-red-600 hover:text-red-900"
-                          title="Delete"
+                          tooltip="Delete Fee"
+                          className="text-red-600 hover:text-red-900 focus:ring-red-300"
                         >
                           <Trash2 className="h-4 w-4" />
-                        </button>
+                        </IconActionButton>
                       </div>
                     </td>
                   </tr>
@@ -1453,6 +1499,7 @@ const Fees: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-2">
                   <select
+                    title="Rows per page"
                     value={itemsPerPage}
                     onChange={(e) => {
                       setItemsPerPage(Number(e.target.value));
@@ -1479,6 +1526,8 @@ const Fees: React.FC = () => {
                       }
                       return (
                         <button
+                          type="button"
+                          title={`Go to page ${pageNum}`}
                           key={pageNum}
                           onClick={() => handlePageChange(pageNum)}
                           className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
@@ -1493,6 +1542,8 @@ const Fees: React.FC = () => {
                     })}
                   </div>
                   <button
+                    type="button"
+                    title="First page"
                     onClick={() => handlePageChange(1)}
                     disabled={currentPage === 1}
                     className="relative inline-flex items-center px-2 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-500 bg-white hover:bg-gray-50 disabled:opacity-50"
@@ -1500,6 +1551,8 @@ const Fees: React.FC = () => {
                     <ChevronsLeft className="h-5 w-5" />
                   </button>
                   <button
+                    type="button"
+                    title="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className="relative inline-flex items-center px-2 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-500 bg-white hover:bg-gray-50 disabled:opacity-50"
@@ -1507,6 +1560,8 @@ const Fees: React.FC = () => {
                     <ChevronLeft className="h-5 w-5" />
                   </button>
                   <button
+                    type="button"
+                    title="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className="relative inline-flex items-center px-2 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-500 bg-white hover:bg-gray-50 disabled:opacity-50"
@@ -1514,6 +1569,8 @@ const Fees: React.FC = () => {
                     <ChevronRight className="h-5 w-5" />
                   </button>
                   <button
+                    type="button"
+                    title="Last page"
                     onClick={() => handlePageChange(totalPages)}
                     disabled={currentPage === totalPages}
                     className="relative inline-flex items-center px-2 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-500 bg-white hover:bg-gray-50 disabled:opacity-50"
@@ -1534,9 +1591,14 @@ const Fees: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">{editingFee ? 'Edit Fee' : 'Add Fee'}</h2>
-              <button onClick={handleCloseModal} className="text-gray-500 hover:text-gray-700">
+              <IconActionButton
+                onClick={handleCloseModal}
+                tooltip="Close dialog"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
                 <X className="h-6 w-6" />
-              </button>
+              </IconActionButton>
             </div>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1689,10 +1751,10 @@ const Fees: React.FC = () => {
                 </div>
               </div>
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={handleCloseModal} className="btn-secondary">
+                <button type="button" onClick={handleCloseModal} className="btn-secondary" title="Discard changes and close">
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
+                <button type="submit" className="btn-primary" title={editingFee ? 'Save fee changes' : 'Create fee'}>
                   {editingFee ? 'Update' : 'Create'} Fee
                 </button>
               </div>
@@ -1707,9 +1769,14 @@ const Fees: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Record Payment</h2>
-              <button onClick={() => { setShowPaymentModal(false); setSelectedFeeForPayment(null); }} className="text-gray-500 hover:text-gray-700">
+              <IconActionButton
+                onClick={() => { setShowPaymentModal(false); setSelectedFeeForPayment(null); }}
+                tooltip="Close dialog"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
                 <X className="h-6 w-6" />
-              </button>
+              </IconActionButton>
             </div>
             <div className="mb-4 p-4 bg-gray-50 rounded-lg">
               <div className="text-sm text-gray-600">Student: {selectedFeeForPayment.student.name}</div>
@@ -1754,10 +1821,10 @@ const Fees: React.FC = () => {
                 <textarea {...paymentForm.register('remarks')} className="input-field" rows={3} placeholder="Optional remarks" />
               </div>
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => { setShowPaymentModal(false); setSelectedFeeForPayment(null); }} className="btn-secondary">
+                <button type="button" onClick={() => { setShowPaymentModal(false); setSelectedFeeForPayment(null); }} className="btn-secondary" title="Cancel recording payment">
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
+                <button type="submit" className="btn-primary" title="Submit payment for this fee">
                   Record Payment
                 </button>
               </div>
@@ -1772,9 +1839,14 @@ const Fees: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Bulk Create Fees</h2>
-              <button onClick={() => { setShowBulkCreateModal(false); bulkCreateForm.reset(); }} className="text-gray-500 hover:text-gray-700">
+              <IconActionButton
+                onClick={() => { setShowBulkCreateModal(false); bulkCreateForm.reset(); }}
+                tooltip="Close dialog"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
                 <X className="h-6 w-6" />
-              </button>
+              </IconActionButton>
             </div>
             <div className="mb-4 p-4 bg-blue-50 rounded-lg">
               <p className="text-sm text-blue-800">
@@ -1864,10 +1936,10 @@ const Fees: React.FC = () => {
                 </div>
               </div>
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => { setShowBulkCreateModal(false); bulkCreateForm.reset(); }} className="btn-secondary">
+                <button type="button" onClick={() => { setShowBulkCreateModal(false); bulkCreateForm.reset(); }} className="btn-secondary" title="Cancel bulk create">
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
+                <button type="submit" className="btn-primary" title="Create fees for all active students in the selected class">
                   Create Fees for All Students
                 </button>
               </div>
@@ -1882,14 +1954,19 @@ const Fees: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Fee Details</h2>
-              <div className="flex gap-2">
-                <button onClick={handlePrintProfile} className="btn-secondary flex items-center gap-2">
+              <div className="flex gap-2 items-center">
+                <button type="button" title="Print fee details" onClick={handlePrintProfile} className="btn-secondary flex items-center gap-2">
                   <Printer className="h-4 w-4" />
                   Print
                 </button>
-                <button onClick={() => { setShowPreviewModal(false); setPreviewFee(null); }} className="text-gray-500 hover:text-gray-700">
+                <IconActionButton
+                  onClick={() => { setShowPreviewModal(false); setPreviewFee(null); }}
+                  tooltip="Close preview"
+                  className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                  sizeClass="p-1 rounded-md"
+                >
                   <X className="h-6 w-6" />
-                </button>
+                </IconActionButton>
               </div>
             </div>
             <div className="space-y-6">

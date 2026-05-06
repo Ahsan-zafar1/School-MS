@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { 
   Plus, 
@@ -22,13 +22,20 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  LogIn
 } from 'lucide-react';
-import api from '../utils/api';
+import api, { getBackendPublicOrigin } from '../utils/api';
 import toast from 'react-hot-toast';
 import { saveAs } from 'file-saver';
 import { useClasses } from '../hooks/useClasses';
 import { useSettings } from '../contexts/SettingsContext';
+import PromoteStudentsModal, {
+  type PromotionFormValues,
+  type PromotionPreviewState,
+  type PromotionCandidatePreview,
+} from '../components/PromoteStudentsModal';
+import IconActionButton from '../components/IconActionButton';
 
 interface Student {
   _id: string;
@@ -40,12 +47,20 @@ interface Student {
   dateOfBirth: string;
   gender: 'male' | 'female' | 'other';
   class: string;
+  section?: string;
   rollNumber: string;
   parentName: string;
   parentPhone: string;
   admissionDate: string;
   isActive: boolean;
   photo?: string;
+  /** Legacy / alternate field names (API may return these instead of parent*) */
+  fatherName?: string;
+  fatherPhone?: string;
+  motherName?: string;
+  motherPhone?: string;
+  guardianName?: string;
+  guardianPhone?: string;
 }
 
 interface StudentForm {
@@ -56,12 +71,113 @@ interface StudentForm {
   dateOfBirth: string;
   gender: 'Male' | 'Female' | 'Other';
   class: string;
+  section: string;
   rollNumber?: string; // Optional - will be auto-generated if not provided
   parentName: string;
   parentPhone: string;
   admissionDate: string;
   isActive: string;
   photo?: FileList;
+}
+
+interface EnrollmentHistoryItem {
+  _id: string;
+  action: 'create' | 'class_change' | 'bulk_assign' | 'promotion' | string;
+  fromClass?: string;
+  toClass?: string;
+  fromAcademicYear?: string;
+  toAcademicYear?: string;
+  note?: string;
+  changedAt?: string;
+}
+
+function formatLocalYMD(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Mongo extended JSON, etc. */
+function unwrapDateLike(val: unknown): unknown {
+  if (val != null && typeof val === 'object' && '$date' in (val as object)) {
+    return (val as { $date: string }).$date;
+  }
+  return val;
+}
+
+/** Like Teachers.tsx: API ISO strings work with slice(0, 10) for <input type="date" /> */
+function dateStringForInput(val: unknown): string {
+  const v = unwrapDateLike(val);
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (!t) return '';
+    if (/^\d{4}-\d{2}-\d{2}/.test(t)) {
+      return t.slice(0, 10);
+    }
+    return toInputDate(v);
+  }
+  return toInputDate(v);
+}
+
+/** YYYY-MM-DD for <input type="date" />: non-ISO strings, timestamps, Date, $date */
+function toInputDate(val: unknown): string {
+  const v = unwrapDateLike(val);
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (!t) return '';
+    const isoHead = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoHead) {
+      return `${isoHead[1]}-${isoHead[2]}-${isoHead[3]}`;
+    }
+    const d = new Date(t);
+    if (!Number.isNaN(d.getTime())) return formatLocalYMD(d);
+    return '';
+  }
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return '';
+    return formatLocalYMD(v);
+  }
+  if (typeof v === 'number' && !Number.isNaN(v)) {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return '';
+    return formatLocalYMD(d);
+  }
+  const d2 = new Date(v as string | number);
+  if (Number.isNaN(d2.getTime())) return '';
+  return formatLocalYMD(d2);
+}
+
+function getParentName(s: Record<string, unknown> | null | undefined): string {
+  if (!s) return '';
+  const a = s.parentName ?? s.fatherName ?? s.motherName ?? s.guardianName;
+  return typeof a === 'string' && a.trim() ? a.trim() : '';
+}
+
+function getParentPhone(s: Record<string, unknown> | null | undefined): string {
+  if (!s) return '';
+  const a = s.parentPhone ?? s.fatherPhone ?? s.motherPhone ?? s.guardianPhone;
+  return typeof a === 'string' && a.trim() ? a.trim() : '';
+}
+
+/** Absolute URL for <img> — CRA dev: relative /uploads/* must use API origin, not :3000 */
+function resolveStudentPhotoUrl(photo: string | null | undefined): string | null {
+  if (photo == null || typeof photo !== 'string') return null;
+  const p = photo.trim();
+  if (!p) return null;
+  if (p.startsWith('http://') || p.startsWith('https://')) return p;
+  const base = getBackendPublicOrigin();
+  if (p.startsWith('/')) return `${base}${p}`;
+  return `${base.replace(/\/$/, '')}/${p.replace(/^\/+/, '')}`;
+}
+
+function getGenderForForm(s: { gender?: string }): 'Male' | 'Female' | 'Other' {
+  const g = (s.gender || '').toString().trim().toLowerCase();
+  if (g === 'female') return 'Female';
+  if (g === 'other') return 'Other';
+  return 'Male';
 }
 
 const Students: React.FC = () => {
@@ -75,9 +191,28 @@ const Students: React.FC = () => {
   const [filterClass, setFilterClass] = useState('');
   const [filterTrackingId, setFilterTrackingId] = useState('');
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
-  
+  const [creatingLoginId, setCreatingLoginId] = useState<string | null>(null);
+  const [showPromoteModal, setShowPromoteModal] = useState(false);
+  const [promoteLoading, setPromoteLoading] = useState(false);
+  const [promoteDryRunLoading, setPromoteDryRunLoading] = useState(false);
+  const [promotionMode, setPromotionMode] = useState<'class' | 'students'>('class');
+  const [promotionStudentIds, setPromotionStudentIds] = useState<string[]>([]);
+  const [promotionForm, setPromotionForm] = useState<PromotionFormValues>({
+    fromClass: '',
+    toClass: '',
+    toSection: '',
+    fromAcademicYear: '',
+    toAcademicYear: String(new Date().getFullYear()),
+    includeInactive: false,
+  });
+  const [promotionPreview, setPromotionPreview] = useState<PromotionPreviewState | null>(null);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
+  const [enrollmentHistory, setEnrollmentHistory] = useState<EnrollmentHistoryItem[]>([]);
+
   // Fetch classes dynamically
-  const { classNames, refetch: refetchClasses } = useClasses({ activeOnly: false });
+  const { classes, classNames, refetch: refetchClasses } = useClasses({ activeOnly: false });
   
   const { getItemsPerPage } = useSettings();
   
@@ -98,11 +233,72 @@ const Students: React.FC = () => {
     setValue,
     watch,
     formState: { errors },
-  } = useForm<StudentForm>({
-    defaultValues: {
-      rollNumber: '' // Explicitly set to empty string
-    }
-  });
+  } = useForm<StudentForm>();
+
+  const selectedClassForForm = watch('class');
+  const selectedSectionForForm = watch('section');
+
+  const sectionOptions = useMemo(() => {
+    const sections = new Set<string>();
+    classes.forEach((cls) => {
+      if (cls.name === selectedClassForForm && cls.section) {
+        sections.add(cls.section.trim());
+      }
+    });
+    return Array.from(sections).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [classes, selectedClassForForm]);
+
+  const promotionSectionOptions = useMemo(() => {
+    const sections = new Set<string>();
+    classes.forEach((cls) => {
+      if (cls.name === promotionForm.toClass && cls.section) {
+        sections.add(cls.section.trim());
+      }
+    });
+    return Array.from(sections).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [classes, promotionForm.toClass]);
+
+  const applyFormFromStudent = (raw: Record<string, unknown>) => {
+    const formValues: StudentForm = {
+      name: String(raw.name ?? ''),
+      email: String(raw.email ?? ''),
+      phone: String(raw.phone ?? ''),
+      address: String(raw.address ?? ''),
+      dateOfBirth: dateStringForInput(raw.dateOfBirth),
+      gender: getGenderForForm({ gender: raw.gender as string | undefined }),
+      class: String(raw.class ?? ''),
+      section: String(raw.section ?? ''),
+      rollNumber: String(raw.rollNumber ?? ''),
+      admissionDate: dateStringForInput(raw.admissionDate),
+      parentName: getParentName(raw),
+      parentPhone: getParentPhone(raw),
+      isActive: (() => {
+        const v = raw.isActive;
+        if (v === true || v === 'true' || v === 'True' || v === 1) return 'true';
+        if (v === false || v === 'false' || v === 'False' || v === 0) return 'false';
+        if (v === undefined || v === null) return 'true';
+        return v ? 'true' : 'false';
+      })(),
+    };
+    reset({ ...formValues, photo: undefined });
+    // Same pattern as Teachers.tsx: inputs mount with the modal; setTimeout(0) reapplies
+    // values after registration so type="date" and selects stay in sync
+    setTimeout(() => {
+      setValue('name', formValues.name, { shouldValidate: false, shouldDirty: false });
+      setValue('email', formValues.email, { shouldValidate: false, shouldDirty: false });
+      setValue('phone', formValues.phone, { shouldValidate: false, shouldDirty: false });
+      setValue('address', formValues.address, { shouldValidate: false, shouldDirty: false });
+      setValue('dateOfBirth', formValues.dateOfBirth, { shouldValidate: false, shouldDirty: false });
+      setValue('admissionDate', formValues.admissionDate, { shouldValidate: false, shouldDirty: false });
+      setValue('gender', formValues.gender, { shouldValidate: false, shouldDirty: false });
+      setValue('class', formValues.class, { shouldValidate: false, shouldDirty: false });
+      setValue('section', formValues.section, { shouldValidate: false, shouldDirty: false });
+      setValue('rollNumber', formValues.rollNumber, { shouldValidate: false, shouldDirty: false });
+      setValue('parentName', formValues.parentName, { shouldValidate: false, shouldDirty: false });
+      setValue('parentPhone', formValues.parentPhone, { shouldValidate: false, shouldDirty: false });
+      setValue('isActive', formValues.isActive, { shouldValidate: false, shouldDirty: false });
+    }, 0);
+  };
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -112,6 +308,12 @@ const Students: React.FC = () => {
   useEffect(() => {
     fetchStudents();
   }, [currentPage, itemsPerPage, sortBy, sortOrder, searchTerm, filterClass, filterTrackingId]);
+
+  useEffect(() => {
+    if (!selectedSectionForForm) return;
+    if (sectionOptions.includes(selectedSectionForForm)) return;
+    setValue('section', '', { shouldValidate: false, shouldDirty: true });
+  }, [selectedSectionForForm, sectionOptions, setValue]);
 
   // Listen for class updates
   useEffect(() => {
@@ -238,46 +440,30 @@ const Students: React.FC = () => {
     }
   };
 
+  // Prefill from the list row — same order as Teachers.tsx: setEditing* → reset/setValue → setShowModal
   const handleEdit = (student: Student) => {
-    console.log('Editing student:', student);
-    console.log('Parent Name:', student.parentName);
-    console.log('Parent Phone:', student.parentPhone);
-    console.log('Is Active:', student.isActive);
     setEditingStudent(student);
-    
-    // Explicitly set all fields to ensure proper prefilling
-    const genderValue: 'Male' | 'Female' | 'Other' | undefined = 
-      student.gender?.toLowerCase() === 'male' ? 'Male' :
-      student.gender?.toLowerCase() === 'female' ? 'Female' :
-      student.gender?.toLowerCase() === 'other' ? 'Other' : undefined;
-    
-    const formValues: Partial<StudentForm> = {
-      name: student.name || '',
-      email: student.email || '',
-      phone: student.phone || '',
-      address: student.address || '',
-      dateOfBirth: student.dateOfBirth ? student.dateOfBirth.slice(0, 10) : '',
-      gender: genderValue,
-      class: student.class || '',
-      rollNumber: student.rollNumber || '',
-      admissionDate: student.admissionDate ? student.admissionDate.slice(0, 10) : '',
-      parentName: student.parentName || '',
-      parentPhone: student.parentPhone || '',
-      isActive: student.isActive !== undefined ? (student.isActive ? 'true' : 'false') : 'true',
-      photo: undefined, // Don't prefill photo
-    };
-    
-    console.log('Form values to reset:', formValues);
-    reset(formValues);
-    
-    // Explicitly set the problematic fields using setValue to ensure they're set
-    setTimeout(() => {
-      setValue('parentName', student.parentName || '');
-      setValue('parentPhone', student.parentPhone || '');
-      setValue('isActive', student.isActive !== undefined ? (student.isActive ? 'true' : 'false') : 'true');
-    }, 0);
-    
+    applyFormFromStudent({ ...student } as unknown as Record<string, unknown>);
     setShowModal(true);
+  };
+
+  const handleCreatePortalUser = async (student: Student) => {
+    setCreatingLoginId(student._id);
+    try {
+      const res = await api.post(`/api/students/${student._id}/create-portal-user`);
+      const data = res.data;
+      if (data.success && data.login) {
+        toast.success(
+          `Portal login created for ${student.name}. Login: ${data.login}, Password: ${data.password || 'student123'}`
+        );
+      } else {
+        toast(data.message || 'Portal user already exists or could not be created.');
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to create portal login');
+    } finally {
+      setCreatingLoginId(null);
+    }
   };
 
   const handleCloseModal = () => {
@@ -291,6 +477,7 @@ const Students: React.FC = () => {
       dateOfBirth: '',
       gender: undefined,
       class: '',
+      section: '',
       rollNumber: '', // Explicitly clear roll number
       parentName: '',
       parentPhone: '',
@@ -329,6 +516,7 @@ const Students: React.FC = () => {
   const handlePrintProfile = (student: Student) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+    const printImgSrc = resolveStudentPhotoUrl(student.photo) || '/default-avatar.png';
 
     const printContent = `
       <!DOCTYPE html>
@@ -462,7 +650,7 @@ const Students: React.FC = () => {
           </div>
 
           <div class="profile-section">
-            <img src="${student.photo || '/default-avatar.png'}" alt="${student.name}" class="profile-photo" onerror="this.src='/default-avatar.png'">
+            <img src="${printImgSrc}" alt="${student.name}" class="profile-photo" onerror="this.src='/default-avatar.png'">
             <div class="profile-info">
               <h2>${student.name}</h2>
               <div class="info-row">
@@ -739,6 +927,165 @@ const Students: React.FC = () => {
     }
   };
 
+  const openPromoteModal = () => {
+    setPromotionMode('class');
+    setPromotionStudentIds([]);
+    setPromotionPreview(null);
+    setPromotionForm((prev) => ({
+      ...prev,
+      fromClass: filterClass || prev.fromClass,
+      toClass: '',
+      toSection: '',
+    }));
+    setShowPromoteModal(true);
+  };
+
+  const openPromoteStudentsModal = (ids: string[], fromClassHint = '') => {
+    if (!ids || ids.length === 0) {
+      toast.error('Please select at least one student');
+      return;
+    }
+    setPromotionMode('students');
+    setPromotionStudentIds(ids);
+    setPromotionPreview(null);
+    setPromotionForm((prev) => ({
+      ...prev,
+      fromClass: fromClassHint || prev.fromClass || '',
+      toClass: '',
+      toSection: '',
+    }));
+    setShowPromoteModal(true);
+  };
+
+  const handlePromotionDryRun = async () => {
+    if (!promotionForm.toClass) {
+      toast.error('Please select To Class');
+      return;
+    }
+    if (promotionMode === 'class' && !promotionForm.fromClass) {
+      toast.error('Please select From Class');
+      return;
+    }
+    if (promotionMode === 'students' && promotionStudentIds.length === 0) {
+      toast.error('Please select at least one student');
+      return;
+    }
+    if (promotionMode === 'class' && promotionForm.fromClass === promotionForm.toClass) {
+      toast.error('From Class and To Class must be different');
+      return;
+    }
+
+    try {
+      setPromoteDryRunLoading(true);
+      const payload: any = {
+        toClass: promotionForm.toClass,
+        toSection: promotionForm.toSection,
+        fromAcademicYear: promotionForm.fromAcademicYear,
+        toAcademicYear: promotionForm.toAcademicYear,
+        includeInactive: promotionForm.includeInactive,
+        dryRun: true,
+      };
+      if (promotionMode === 'class') {
+        payload.fromClass = promotionForm.fromClass;
+      } else {
+        payload.studentIds = promotionStudentIds;
+        if (promotionForm.fromClass) payload.fromClass = promotionForm.fromClass;
+      }
+
+      const res = await api.post('/api/students/promote-class', payload);
+      setPromotionPreview({
+        candidateCount: Number(res.data?.candidateCount || 0),
+        candidates: (res.data?.candidates || []) as PromotionCandidatePreview[],
+      });
+      toast.success(`Dry run complete. ${res.data?.candidateCount || 0} student(s) eligible.`);
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Dry run failed');
+      setPromotionPreview(null);
+    } finally {
+      setPromoteDryRunLoading(false);
+    }
+  };
+
+  const handlePromoteClass = async () => {
+    if (!promotionForm.toClass) {
+      toast.error('Please select To Class');
+      return;
+    }
+    if (promotionMode === 'class' && !promotionForm.fromClass) {
+      toast.error('Please select From Class');
+      return;
+    }
+    if (promotionMode === 'students' && promotionStudentIds.length === 0) {
+      toast.error('Please select at least one student');
+      return;
+    }
+    if (promotionMode === 'class' && promotionForm.fromClass === promotionForm.toClass) {
+      toast.error('From Class and To Class must be different');
+      return;
+    }
+    const actionLabel = promotionMode === 'class'
+      ? `Promote students from ${promotionForm.fromClass} to ${promotionForm.toClass}${promotionForm.toSection ? `-${promotionForm.toSection}` : ''}?`
+      : `Promote ${promotionStudentIds.length} selected student(s) to ${promotionForm.toClass}${promotionForm.toSection ? `-${promotionForm.toSection}` : ''}?`;
+    if (
+      !window.confirm(
+        `${actionLabel} ` +
+          'This updates only current class and keeps previous exam/result records unchanged.'
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setPromoteLoading(true);
+      const payload: any = {
+        toClass: promotionForm.toClass,
+        toSection: promotionForm.toSection,
+        fromAcademicYear: promotionForm.fromAcademicYear,
+        toAcademicYear: promotionForm.toAcademicYear,
+        includeInactive: promotionForm.includeInactive,
+        dryRun: false,
+      };
+      if (promotionMode === 'class') {
+        payload.fromClass = promotionForm.fromClass;
+      } else {
+        payload.studentIds = promotionStudentIds;
+        if (promotionForm.fromClass) payload.fromClass = promotionForm.fromClass;
+      }
+
+      const res = await api.post('/api/students/promote-class', payload);
+      const summary = res.data?.summary;
+      toast.success(
+        summary
+          ? `Promoted: ${summary.promotedCount}, Skipped: ${summary.skippedCount}`
+          : (res.data?.message || 'Promotion completed')
+      );
+      setShowPromoteModal(false);
+      setPromotionPreview(null);
+      setSelectedStudents([]);
+      setPromotionStudentIds([]);
+      await fetchStudents();
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Class promotion failed');
+    } finally {
+      setPromoteLoading(false);
+    }
+  };
+
+  const handleViewEnrollmentHistory = async (student: Student) => {
+    try {
+      setHistoryStudent(student);
+      setShowHistoryModal(true);
+      setHistoryLoading(true);
+      setEnrollmentHistory([]);
+      const res = await api.get(`/api/students/${student._id}/enrollment-history`);
+      setEnrollmentHistory((res.data?.data || []) as EnrollmentHistoryItem[]);
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Failed to load enrollment history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -754,31 +1101,45 @@ const Students: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900">Students</h1>
           <p className="text-gray-600">Manage student information and records</p>
         </div>
-        <button
-          onClick={() => {
-            reset({
-              name: '',
-              email: '',
-              phone: '',
-              address: '',
-              dateOfBirth: '',
-              gender: undefined,
-              class: '',
-              rollNumber: '', // Explicitly clear roll number for new student
-              parentName: '',
-              parentPhone: '',
-              admissionDate: '',
-              isActive: '',
-              photo: undefined,
-            });
-            setEditingStudent(null);
-            setShowModal(true);
-          }}
-          className="btn-primary flex items-center gap-2"
-        >
-          <Plus className="h-4 w-4" />
-          Add Student
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openPromoteModal}
+            className="btn-secondary flex items-center gap-2"
+            title="Promote all students from one class to another"
+            type="button"
+          >
+            <GraduationCap className="h-4 w-4" />
+            Promote Class
+          </button>
+          <button
+            onClick={() => {
+              reset({
+                name: '',
+                email: '',
+                phone: '',
+                address: '',
+                dateOfBirth: '',
+                gender: undefined,
+                class: '',
+              section: '',
+                rollNumber: '', // Explicitly clear roll number for new student
+                parentName: '',
+                parentPhone: '',
+                admissionDate: '',
+                isActive: '',
+                photo: undefined,
+              });
+              setEditingStudent(null);
+              setShowModal(true);
+            }}
+            className="btn-primary flex items-center gap-2"
+            title="Open form to add a new student"
+            type="button"
+          >
+            <Plus className="h-4 w-4" />
+            Add Student
+          </button>
+        </div>
       </div>
 
       {/* Filters and Search */}
@@ -825,6 +1186,8 @@ const Students: React.FC = () => {
               Data Management:
             </span>
             <button 
+              type="button"
+              title="Download student list as CSV"
               onClick={() => handleExport('csv')}
               className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out"
             >
@@ -833,6 +1196,8 @@ const Students: React.FC = () => {
               <span>Export CSV</span>
             </button>
             <button 
+              type="button"
+              title="Download student list as Excel"
               onClick={() => handleExport('excel')}
               className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out"
             >
@@ -840,7 +1205,10 @@ const Students: React.FC = () => {
               <Download className="h-4 w-4 group-hover:animate-bounce" />
               <span>Export Excel</span>
             </button>
-            <label className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out cursor-pointer">
+            <label
+              title="Import students from CSV or Excel file"
+              className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out cursor-pointer"
+            >
               <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-10 rounded-lg transition-opacity"></div>
               <Upload className="h-4 w-4 group-hover:animate-bounce" />
               <span>Import Data</span>
@@ -864,18 +1232,32 @@ const Students: React.FC = () => {
             </span>
             <div className="flex flex-wrap items-center gap-2">
               <button
+                type="button"
+                title="Set selected students to active"
                 onClick={() => handleBulkUpdate('activate')}
                 className="btn-primary text-sm px-3 py-1"
               >
                 Activate
               </button>
               <button
+                type="button"
+                title="Set selected students to inactive"
                 onClick={() => handleBulkUpdate('deactivate')}
                 className="btn-secondary text-sm px-3 py-1"
               >
                 Deactivate
               </button>
+              <button
+                type="button"
+                title="Promote selected students to another class"
+                onClick={() => openPromoteStudentsModal(selectedStudents)}
+                className="btn-secondary text-sm px-3 py-1 flex items-center gap-1"
+              >
+                <GraduationCap className="h-3 w-3" />
+                Promote Selected
+              </button>
               <select
+                title="Assign all selected students to a class"
                 onChange={(e) => {
                   if (e.target.value) {
                     handleBulkUpdate('assignClass', e.target.value);
@@ -893,14 +1275,17 @@ const Students: React.FC = () => {
                 ))}
               </select>
               <button
+                type="button"
                 onClick={() => handleGenerateIDCard()}
                 className="flex items-center gap-1 text-sm px-3 py-1 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200"
-                title="Generate ID Cards for Selected Students"
+                title="Generate ID cards PDF for selected students"
               >
                 <CreditCard className="h-3 w-3" />
                 Generate ID Cards
               </button>
               <button
+                type="button"
+                title="Permanently delete selected students"
                 onClick={handleBulkDelete}
                 className="btn-danger text-sm px-3 py-1"
               >
@@ -920,12 +1305,14 @@ const Students: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   <input
                     type="checkbox"
+                    title="Select all students on this page"
                     onChange={(e) => handleSelectAll(e.target.checked)}
                     checked={students.length > 0 && students.every(s => selectedStudents.includes(s._id))}
                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
                 </th>
                 <th 
+                  title="Sort by tracking ID"
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort('studentId')}
                 >
@@ -935,6 +1322,7 @@ const Students: React.FC = () => {
                   </div>
                 </th>
                 <th 
+                  title="Sort by student name"
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort('name')}
                 >
@@ -947,6 +1335,7 @@ const Students: React.FC = () => {
                   Contact
                 </th>
                 <th 
+                  title="Sort by class"
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort('class')}
                 >
@@ -956,6 +1345,7 @@ const Students: React.FC = () => {
                   </div>
                 </th>
                 <th 
+                  title="Sort by status"
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort('isActive')}
                 >
@@ -988,7 +1378,7 @@ const Students: React.FC = () => {
                       <div className="flex-shrink-0 h-10 w-10">
                         <img
                           className="h-10 w-10 rounded-full object-cover"
-                          src={student.photo || '/default-avatar.png'}
+                          src={resolveStudentPhotoUrl(student.photo) || '/default-avatar.png'}
                           alt={student.name}
                         />
                       </div>
@@ -1020,37 +1410,63 @@ const Students: React.FC = () => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex items-center space-x-2">
-                      <button
+                      <IconActionButton
                         onClick={() => {
                           setPreviewStudent(student);
                           setShowPreviewModal(true);
                         }}
-                        className="text-blue-600 hover:text-blue-900"
-                        title="View Profile"
+                        className="text-blue-600 hover:text-blue-900 focus:ring-blue-300"
+                        tooltip="View Profile"
                       >
                         <Eye className="h-4 w-4" />
-                      </button>
-                      <button
+                      </IconActionButton>
+                      <IconActionButton
                         onClick={() => handleGenerateIDCard(student._id)}
-                        className="text-purple-600 hover:text-purple-900"
-                        title="Generate ID Card"
+                        className="text-purple-600 hover:text-purple-900 focus:ring-purple-300"
+                        tooltip="Generate ID Card"
                       >
                         <CreditCard className="h-4 w-4" />
-                      </button>
-                      <button
+                      </IconActionButton>
+                      <IconActionButton
+                        onClick={() => handleCreatePortalUser(student)}
+                        disabled={creatingLoginId === student._id}
+                        className="text-green-600 hover:text-green-900 disabled:opacity-50 focus:ring-green-300"
+                        tooltip="Create Portal Login"
+                      >
+                        {creatingLoginId === student._id ? (
+                          <span className="text-xs">...</span>
+                        ) : (
+                          <LogIn className="h-4 w-4" />
+                        )}
+                      </IconActionButton>
+                      <IconActionButton
                         onClick={() => handleEdit(student)}
-                        className="text-primary-600 hover:text-primary-900"
-                        title="Edit"
+                        className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
+                        tooltip="Edit Student"
                       >
                         <Edit className="h-4 w-4" />
-                      </button>
-                      <button
+                      </IconActionButton>
+                      <IconActionButton
+                        onClick={() => openPromoteStudentsModal([student._id], student.class)}
+                        className="text-amber-600 hover:text-amber-900 focus:ring-amber-300"
+                        tooltip="Promote Student"
+                      >
+                        <GraduationCap className="h-4 w-4" />
+                      </IconActionButton>
+                      <IconActionButton
+                        onClick={() => handleViewEnrollmentHistory(student)}
+                        className="text-indigo-600 hover:text-indigo-900 focus:ring-indigo-300"
+                        tooltip="View Enrollment History"
+                      >
+                        <Calendar className="h-4 w-4" />
+                      </IconActionButton>
+                      <IconActionButton
                         onClick={() => handleDelete(student._id)}
-                        className="text-red-600 hover:text-red-900"
-                        title="Delete"
+                        className="text-red-600 hover:text-red-900 focus:ring-red-300"
+                        tooltip="Delete Student"
                       >
                         <Trash2 className="h-4 w-4" />
-                      </button>
+                      </IconActionButton>
                     </div>
                   </td>
                 </tr>
@@ -1078,6 +1494,8 @@ const Students: React.FC = () => {
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
               className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Go to previous page"
+              type="button"
             >
               Previous
             </button>
@@ -1085,6 +1503,8 @@ const Students: React.FC = () => {
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage >= totalPages}
               className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Go to next page"
+              type="button"
             >
               Next
             </button>
@@ -1149,7 +1569,9 @@ const Students: React.FC = () => {
                       return (
                         <button
                           key={pageNum}
+                          type="button"
                           onClick={() => handlePageChange(pageNum)}
+                          title={`Go to page ${pageNum}`}
                           className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
                             currentPage === pageNum
                               ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
@@ -1193,15 +1615,16 @@ const Students: React.FC = () => {
               <h3 className="text-lg font-medium text-gray-900">
                 {editingStudent ? 'Edit Student' : 'Add New Student'}
               </h3>
-              <button
+              <IconActionButton
                 onClick={handleCloseModal}
-                className="text-gray-400 hover:text-gray-600"
+                tooltip="Close dialog"
+                className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
               >
-                <span className="sr-only">Close</span>
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </IconActionButton>
             </div>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -1285,6 +1708,23 @@ const Students: React.FC = () => {
                 </div>
 
                 <div>
+                  <label className="block text-sm font-medium text-gray-700">Section</label>
+                  <select
+                    {...register('section', { required: 'Section is required' })}
+                    className="input-field"
+                    disabled={!selectedClassForForm}
+                  >
+                    <option value="">Select section</option>
+                    {sectionOptions.map((section) => (
+                      <option key={section} value={section}>
+                        {section}
+                      </option>
+                    ))}
+                  </select>
+                  {errors.section && <p className="text-red-500 text-sm mt-1">{errors.section.message}</p>}
+                </div>
+
+                <div>
                   <label className="block text-sm font-medium text-gray-700">
                     Roll Number
                     <span className="text-xs text-gray-500 ml-2">(Auto-generated if left empty)</span>
@@ -1333,8 +1773,30 @@ const Students: React.FC = () => {
                   {errors.parentPhone && <p className="text-red-500 text-sm mt-1">{errors.parentPhone.message}</p>}
                 </div>
 
-                <div>
+                <div className="md:col-span-2">
                   <label htmlFor="photo" className="block text-sm font-medium text-gray-700">Photo</label>
+                  {editingStudent && (
+                    <div className="mt-2 mb-3 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                      <p className="text-xs font-medium text-gray-600 mb-2">Current photo (saved)</p>
+                      {resolveStudentPhotoUrl(editingStudent.photo) ? (
+                        <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+                          <img
+                            src={resolveStudentPhotoUrl(editingStudent.photo)!}
+                            alt={editingStudent.name}
+                            className="h-20 w-20 rounded-lg object-cover border border-gray-200"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = '/default-avatar.png';
+                            }}
+                          />
+                          <p className="text-xs text-gray-600 break-all self-center sm:self-start" title="Stored value">
+                            {editingStudent.photo}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">No photo on file. Choose a file below to add one.</p>
+                      )}
+                    </div>
+                  )}
                   <input
                     type="file"
                     id="photo"
@@ -1377,17 +1839,121 @@ const Students: React.FC = () => {
                   type="button"
                   onClick={handleCloseModal}
                   className="btn-secondary"
+                  title="Discard changes and close"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="btn-primary"
+                  title={editingStudent ? 'Save changes to this student' : 'Create student record'}
                 >
                   {editingStudent ? 'Update Student' : 'Add Student'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      <PromoteStudentsModal
+        open={showPromoteModal}
+        mode={promotionMode}
+        selectedStudentCount={promotionStudentIds.length}
+        form={promotionForm}
+        onFormChange={(partial) => setPromotionForm((p) => ({ ...p, ...partial }))}
+        classNameOptions={classNames}
+        sectionOptionsForToClass={promotionSectionOptions}
+        fromClassControl="select"
+        promotionPreview={promotionPreview}
+        promoteLoading={promoteLoading}
+        promoteDryRunLoading={promoteDryRunLoading}
+        onClose={() => {
+          setShowPromoteModal(false);
+          setPromotionPreview(null);
+          setPromotionStudentIds([]);
+        }}
+        onDryRun={handlePromotionDryRun}
+        onPromote={handlePromoteClass}
+      />
+
+      {/* Enrollment History Modal */}
+      {showHistoryModal && historyStudent && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Enrollment History - {historyStudent.name}
+              </h3>
+              <IconActionButton
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setHistoryStudent(null);
+                  setEnrollmentHistory([]);
+                }}
+                tooltip="Close dialog"
+                className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </IconActionButton>
+            </div>
+
+            {historyLoading ? (
+              <div className="py-10 text-center text-sm text-gray-500">Loading history...</div>
+            ) : enrollmentHistory.length === 0 ? (
+              <div className="py-10 text-center text-sm text-gray-500">No enrollment history found.</div>
+            ) : (
+              <div className="overflow-x-auto border rounded-md">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">From Class</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">To Class</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">From Year</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">To Year</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {enrollmentHistory.map((h) => (
+                      <tr key={h._id}>
+                        <td className="px-4 py-2 text-sm text-gray-700">
+                          {h.changedAt ? new Date(h.changedAt).toLocaleString() : '-'}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-gray-700 capitalize">
+                          {h.action?.replace(/_/g, ' ') || '-'}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{h.fromClass || '-'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{h.toClass || '-'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{h.fromAcademicYear || '-'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{h.toAcademicYear || '-'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{h.note || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setHistoryStudent(null);
+                  setEnrollmentHistory([]);
+                }}
+                className="btn-secondary"
+                title="Close enrollment history"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1398,17 +1964,19 @@ const Students: React.FC = () => {
           <div className="relative top-10 mx-auto p-6 border w-11/12 md:w-2/3 lg:w-1/2 shadow-lg rounded-md bg-white max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-semibold text-gray-900">Student Profile</h3>
-              <button
+              <IconActionButton
                 onClick={() => {
                   setShowPreviewModal(false);
                   setPreviewStudent(null);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                tooltip="Close profile preview"
+                className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
               >
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </IconActionButton>
             </div>
 
             <div className="space-y-6">
@@ -1417,7 +1985,7 @@ const Students: React.FC = () => {
                 <div className="flex-shrink-0">
                   <img
                     className="h-32 w-32 rounded-full object-cover border-4 border-primary-200"
-                    src={previewStudent.photo || '/default-avatar.png'}
+                    src={resolveStudentPhotoUrl(previewStudent.photo) || '/default-avatar.png'}
                     alt={previewStudent.name}
                   />
                 </div>
@@ -1537,6 +2105,8 @@ const Students: React.FC = () => {
               {/* Action Buttons */}
               <div className="flex justify-end space-x-3 pt-4 border-t">
                 <button
+                  type="button"
+                  title="Close profile preview"
                   onClick={() => {
                     setShowPreviewModal(false);
                     setPreviewStudent(null);
@@ -1546,6 +2116,8 @@ const Students: React.FC = () => {
                   Close
                 </button>
                 <button
+                  type="button"
+                  title="Open print dialog for this profile"
                   onClick={() => handlePrintProfile(previewStudent)}
                   className="btn-secondary flex items-center gap-2"
                 >
@@ -1553,6 +2125,8 @@ const Students: React.FC = () => {
                   Print Profile
                 </button>
                 <button
+                  type="button"
+                  title="Open edit form for this student"
                   onClick={() => {
                     setShowPreviewModal(false);
                     handleEdit(previewStudent);

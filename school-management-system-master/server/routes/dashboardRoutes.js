@@ -246,32 +246,45 @@ router.get('/', protect, async (req, res) => {
     const sixMonthsAgo = new Date(now);
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
     
-    const monthlyRevenueData = await Fee.aggregate([
-      {
-        $match: {
-          status: { $in: ['Paid', 'paid', 'PAID'] },
-          createdAt: { $gte: sixMonthsAgo }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' }
-          },
-          revenue: { $sum: { $ifNull: ['$paidAmount', '$amount'] } }
-        }
-      },
-      {
-        $sort: { '_id.year': 1, '_id.month': 1 }
-      }
-    ]);
+    let monthlyRevenueData = [];
+    try {
+      monthlyRevenueData = await Fee.aggregate([
+        {
+          $match: {
+            status: { $in: ['Paid', 'paid', 'PAID'] },
+            createdAt: { $gte: sixMonthsAgo }
+          }
+        },
+        {
+          $addFields: {
+            _line: { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: '$createdAt' },
+              month: { $month: '$createdAt' }
+            },
+            revenue: { $sum: '$_line' }
+          }
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } }
+      ]);
+    } catch (aggErr) {
+      console.error('Dashboard monthly revenue aggregate failed, using empty series:', aggErr.message);
+      monthlyRevenueData = [];
+    }
     
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthlyRevenue = monthlyRevenueData.map(item => ({
-      month: monthNames[item._id.month - 1],
-      revenue: item.revenue || 0
-    }));
+    const monthlyRevenue = monthlyRevenueData.map((item) => {
+      const m = item?._id?.month;
+      const monthLabel = typeof m === 'number' && m >= 1 && m <= 12 ? monthNames[m - 1] : '—';
+      return {
+        month: monthLabel,
+        revenue: Number(item.revenue) || 0
+      };
+    });
     
     // Fill in missing months with 0
     const last6Months = [];
@@ -331,21 +344,40 @@ router.get('/', protect, async (req, res) => {
       });
     }
     
-    // Get recent activities from Activity model
-    const recentActivities = await Activity.find()
-      .sort({ timestamp: -1 })
-      .limit(10)
-      .populate('user', 'name')
-      .lean();
+    // Get recent activities (never fail the whole dashboard on bad/legacy rows)
+    let recentActivities = [];
+    try {
+      recentActivities = await Activity.find()
+        .sort({ timestamp: -1 })
+        .limit(10)
+        .populate('user', 'name')
+        .lean();
+    } catch (actErr) {
+      console.error('Dashboard Activity query failed:', actErr.message);
+      recentActivities = [];
+    }
+
+    const formattedActivities = recentActivities
+      .filter((a) => a && a._id)
+      .map((activity, index) => {
+        const actionRaw = activity.action != null ? String(activity.action) : 'other';
+        const actionTitle = actionRaw.length
+          ? actionRaw.charAt(0).toUpperCase() + actionRaw.slice(1)
+          : 'Other';
+        return {
+          id: activity._id.toString() || `activity-${index}`,
+          action: actionTitle,
+          description: activity.description != null ? String(activity.description) : '',
+          timestamp: activity.timestamp || activity.createdAt,
+          user: (activity.user && activity.user.name) || 'System'
+        };
+      });
     
-    const formattedActivities = recentActivities.map((activity, index) => ({
-      id: activity._id.toString() || `activity-${index}`,
-      action: activity.action.charAt(0).toUpperCase() + activity.action.slice(1),
-      description: activity.description,
-      timestamp: activity.timestamp || activity.createdAt,
-      user: activity.user?.name || 'System'
-    }));
-    
+    const safeGrowth = (g) => {
+      const n = parseFloat(String(g));
+      return Number.isFinite(n) ? n : 0;
+    };
+
     res.json({
       success: true,
       data: {
@@ -356,8 +388,8 @@ router.get('/', protect, async (req, res) => {
           totalRevenue
         },
         growth: {
-          studentGrowth: parseFloat(studentGrowth),
-          teacherGrowth: parseFloat(teacherGrowth)
+          studentGrowth: safeGrowth(studentGrowth),
+          teacherGrowth: safeGrowth(teacherGrowth)
         },
         monthlyRevenue: last6Months,
         attendance: {

@@ -30,6 +30,8 @@ import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { saveAs } from 'file-saver';
 import { useSettings } from '../contexts/SettingsContext';
+import { useSubjects } from '../hooks/useSubjects';
+import IconActionButton from '../components/IconActionButton';
 
 interface Teacher {
   _id: string;
@@ -81,6 +83,7 @@ const Teachers: React.FC = () => {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const { getItemsPerPage } = useSettings();
+  const { subjectNames: catalogSubjectNames } = useSubjects();
   const [itemsPerPage, setItemsPerPage] = useState(getItemsPerPage());
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
@@ -582,6 +585,8 @@ const Teachers: React.FC = () => {
           <p className="text-gray-600">Manage teacher information and assignments</p>
         </div>
         <button
+          type="button"
+          title="Open form to add a new teacher"
           onClick={() => setShowModal(true)}
           className="btn-primary flex items-center gap-2"
         >
@@ -609,14 +614,11 @@ const Teachers: React.FC = () => {
             className="input-field"
           >
             <option value="">All Subjects</option>
-            <option value="Mathematics">Mathematics</option>
-            <option value="Physics">Physics</option>
-            <option value="Chemistry">Chemistry</option>
-            <option value="Biology">Biology</option>
-            <option value="English">English</option>
-            <option value="History">History</option>
-            <option value="Geography">Geography</option>
-            <option value="Computer Science">Computer Science</option>
+            {catalogSubjectNames.map((s: string) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
           </select>
           <div className="relative">
             <input
@@ -637,6 +639,8 @@ const Teachers: React.FC = () => {
               Data Management:
             </span>
             <button 
+              type="button"
+              title="Download teacher list as CSV"
               onClick={() => handleExport('csv')}
               className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out"
             >
@@ -645,6 +649,8 @@ const Teachers: React.FC = () => {
               <span>Export CSV</span>
             </button>
             <button 
+              type="button"
+              title="Download teacher list as Excel"
               onClick={() => handleExport('excel')}
               className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out"
             >
@@ -652,7 +658,10 @@ const Teachers: React.FC = () => {
               <Download className="h-4 w-4 group-hover:animate-bounce" />
               <span>Export Excel</span>
             </button>
-            <label className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out cursor-pointer">
+            <label
+              title="Import teachers from CSV or Excel"
+              className="group relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ease-in-out cursor-pointer"
+            >
               <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-10 rounded-lg transition-opacity"></div>
               <Upload className="h-4 w-4 group-hover:animate-bounce" />
               <span>Import Data</span>
@@ -676,26 +685,33 @@ const Teachers: React.FC = () => {
             </span>
             <div className="flex flex-wrap items-center gap-2">
               <button
+                type="button"
+                title="Set selected teachers to active"
                 onClick={() => handleBulkUpdate('activate')}
                 className="btn-primary text-sm px-3 py-1"
               >
                 Activate
               </button>
               <button
+                type="button"
+                title="Set selected teachers to inactive"
                 onClick={() => handleBulkUpdate('deactivate')}
                 className="btn-secondary text-sm px-3 py-1"
               >
                 Deactivate
               </button>
               <button
+                type="button"
                 onClick={() => handleGenerateIDCard()}
                 className="flex items-center gap-1 text-sm px-3 py-1 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200"
-                title="Generate ID Cards for Selected Teachers"
+                title="Generate ID cards PDF for selected teachers"
               >
                 <CreditCard className="h-3 w-3" />
                 Generate ID Cards
               </button>
               <button
+                type="button"
+                title="Permanently delete selected teachers"
                 onClick={handleBulkDelete}
                 className="btn-danger text-sm px-3 py-1"
               >
@@ -715,6 +731,7 @@ const Teachers: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   <input
                     type="checkbox"
+                    title="Select all teachers on this page"
                     onChange={(e) => handleSelectAll(e.target.checked)}
                     checked={teachers.every(t => selectedTeachers.includes(t._id)) && teachers.length > 0}
                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
@@ -860,6 +877,8 @@ const Teachers: React.FC = () => {
         <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
           <div className="flex-1 flex justify-between sm:hidden">
             <button
+              type="button"
+              title="Go to previous page"
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
               className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -867,6 +886,8 @@ const Teachers: React.FC = () => {
               Previous
             </button>
             <button
+              type="button"
+              title="Go to next page"
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage >= totalPages}
               className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -887,6 +908,7 @@ const Teachers: React.FC = () => {
             <div>
               <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                 <button
+                  type="button"
                   onClick={() => handlePageChange(1)}
                   disabled={currentPage === 1}
                   className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -921,6 +943,8 @@ const Teachers: React.FC = () => {
                       return (
                         <button
                           key={pageNum}
+                          type="button"
+                          title={`Go to page ${pageNum}`}
                           onClick={() => handlePageChange(pageNum)}
                           className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
                             currentPage === pageNum
@@ -936,6 +960,7 @@ const Teachers: React.FC = () => {
                 )}
                 
                 <button
+                  type="button"
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage >= totalPages}
                   className="relative inline-flex items-center px-2 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -944,6 +969,7 @@ const Teachers: React.FC = () => {
                   <ChevronRight className="h-5 w-5" />
                 </button>
                 <button
+                  type="button"
                   onClick={() => handlePageChange(totalPages)}
                   disabled={currentPage >= totalPages}
                   className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -965,21 +991,24 @@ const Teachers: React.FC = () => {
               <h3 className="text-lg font-medium text-gray-900">Teacher Profile</h3>
               <div className="flex gap-2">
                 <button
+                  type="button"
+                  title="Open print dialog for this profile"
                   onClick={handlePrintProfile}
                   className="btn-secondary flex items-center gap-2 text-sm"
                 >
                   <Printer className="h-4 w-4" />
                   Print Profile
                 </button>
-                <button
+                <IconActionButton
                   onClick={() => setShowPreviewModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  tooltip="Close profile preview"
+                  className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                  sizeClass="p-1 rounded-md"
                 >
-                  <span className="sr-only">Close</span>
                   <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
-                </button>
+                </IconActionButton>
               </div>
             </div>
 
@@ -1097,15 +1126,16 @@ const Teachers: React.FC = () => {
               <h3 className="text-lg font-medium text-gray-900">
                 {editingTeacher ? 'Edit Teacher' : 'Add New Teacher'}
               </h3>
-              <button
+              <IconActionButton
                 onClick={handleCloseModal}
-                className="text-gray-400 hover:text-gray-600"
+                tooltip="Close dialog"
+                className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
               >
-                <span className="sr-only">Close</span>
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </IconActionButton>
             </div>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -1171,20 +1201,25 @@ const Teachers: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Subject</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Subject</label>
                   <select
                     {...register('subject', { required: 'Subject is required' })}
                     className="input-field"
                   >
                     <option value="">Select subject</option>
-                    <option value="Mathematics">Mathematics</option>
-                    <option value="Physics">Physics</option>
-                    <option value="Chemistry">Chemistry</option>
-                    <option value="Biology">Biology</option>
-                    <option value="English">English</option>
-                    <option value="History">History</option>
-                    <option value="Geography">Geography</option>
-                    <option value="Computer Science">Computer Science</option>
+                    {(() => {
+                      const names = new Set<string>(catalogSubjectNames);
+                      if (editingTeacher?.subject?.trim()) {
+                        names.add(editingTeacher.subject.trim());
+                      }
+                      return Array.from(names)
+                        .sort()
+                        .map((s: string) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ));
+                    })()}
                   </select>
                   {errors.subject && <p className="text-red-500 text-sm mt-1">{errors.subject.message}</p>}
                 </div>
@@ -1281,12 +1316,14 @@ const Teachers: React.FC = () => {
                   type="button"
                   onClick={handleCloseModal}
                   className="btn-secondary"
+                  title="Discard changes and close"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="btn-primary"
+                  title={editingTeacher ? 'Save changes to this teacher' : 'Create teacher record'}
                 >
                   {editingTeacher ? 'Update Teacher' : 'Add Teacher'}
                 </button>

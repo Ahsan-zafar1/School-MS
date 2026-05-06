@@ -11,6 +11,7 @@ const csvParser = require('csv-parser');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { searchRegexFromQuery, pickSortField, ATTENDANCE_LIST_SORT } = require('../utils/queryHelpers');
 
 // Protect all routes
 router.use(protect);
@@ -89,7 +90,7 @@ router.get('/', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    const sortBy = req.query.sortBy || 'date';
+    const sortBy = pickSortField(req.query.sortBy, ATTENDANCE_LIST_SORT, 'date');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
     
@@ -99,13 +100,15 @@ router.get('/', async (req, res) => {
     
     // Search filter
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { attendanceId: searchRegex },
-          { remarks: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { attendanceId: searchRegex },
+            { remarks: searchRegex }
+          ]
+        });
+      }
     }
     
     // Type filter (student or teacher)
@@ -919,13 +922,15 @@ router.get('/export', async (req, res) => {
     const andConditions = [];
     
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { attendanceId: searchRegex },
-          { remarks: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { attendanceId: searchRegex },
+            { remarks: searchRegex }
+          ]
+        });
+      }
     }
     
     if (req.query.type) filter.type = req.query.type;

@@ -220,6 +220,7 @@ const Settings: React.FC = () => {
         await api.put(`/api/users/${editingUser._id}`, {
           name: userData.name,
           email: userData.email,
+          username: userData.username,
           role: userData.role,
         });
         toast.success('User updated successfully!');
@@ -1013,7 +1014,7 @@ const Settings: React.FC = () => {
                       <tr>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Email</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Login (Email / Username)</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Role</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Updated</th>
@@ -1031,7 +1032,7 @@ const Settings: React.FC = () => {
                             {user.name || user.username}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                            {user.email}
+                            {user.email || user.username || '—'}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
@@ -1118,9 +1119,16 @@ const Settings: React.FC = () => {
                 onSubmit={(e) => {
                   e.preventDefault();
                   const formData = new FormData(e.target as HTMLFormElement);
+                  const email = (formData.get('email') as string)?.trim() || undefined;
+                  const username = (formData.get('username') as string)?.trim() || undefined;
+                  if (!email && !username) {
+                    toast.error('Enter email or username (at least one required for login)');
+                    return;
+                  }
                   const userData = {
                     name: formData.get('name'),
-                    email: formData.get('email'),
+                    email: email || undefined,
+                    username: username || undefined,
                     password: formData.get('password'),
                     role: formData.get('role'),
                   };
@@ -1141,16 +1149,26 @@ const Settings: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Email *</label>
+                  <label className="block text-sm font-medium text-gray-700">Email</label>
                   <input
                     name="email"
                     type="email"
-                    required
                     className="input-field"
-                    placeholder="Enter email"
+                    placeholder="Email (or use username below)"
                     defaultValue={editingUser?.email || ''}
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Username</label>
+                  <input
+                    name="username"
+                    type="text"
+                    className="input-field"
+                    placeholder="Username for login if no email"
+                    defaultValue={editingUser?.username || ''}
+                  />
+                </div>
+                <p className="text-xs text-gray-500">At least one of Email or Username is required for login.</p>
 
                 {!editingUser && (
                   <div>

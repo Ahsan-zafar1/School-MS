@@ -24,10 +24,13 @@ import {
   Square,
   BarChart3
 } from 'lucide-react';
+import axios from 'axios';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { useClasses } from '../hooks/useClasses';
+import { useSubjects } from '../hooks/useSubjects';
 import { useSettings } from '../contexts/SettingsContext';
+import IconActionButton from '../components/IconActionButton';
 
 interface Result {
   _id: string;
@@ -93,18 +96,27 @@ const Results: React.FC = () => {
   const [filterSubject, setFilterSubject] = useState('');
   const [filterTerm, setFilterTerm] = useState('');
   const [filterAcademicYear, setFilterAcademicYear] = useState('');
+  const [academicYearFilterInitialized, setAcademicYearFilterInitialized] = useState(false);
   const [filterGrade, setFilterGrade] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterActive, setFilterActive] = useState('');
   const [selectedResults, setSelectedResults] = useState<string[]>([]);
   const [showStats, setShowStats] = useState(false);
   const [stats, setStats] = useState<any>(null);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportScope, setReportScope] = useState<'student' | 'class' | 'term'>('student');
+  const [reportStudentId, setReportStudentId] = useState('');
+  const [reportClass, setReportClass] = useState('');
+  const [reportTerm, setReportTerm] = useState('');
+  const [reportAcademicYear, setReportAcademicYear] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
   
   // Fetch students and exams for dropdowns
   const [students, setStudents] = useState<any[]>([]);
   const [exams, setExams] = useState<any[]>([]);
   const { classNames } = useClasses({ activeOnly: false });
-  const { getItemsPerPage, getDefaultAcademicYear, getPassingPercentage } = useSettings();
+  const { subjectNames: catalogSubjectNames } = useSubjects();
+  const { getItemsPerPage, getDefaultAcademicYear, getPassingPercentage, getSchoolName, loading: settingsLoading } = useSettings();
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -138,8 +150,17 @@ const Results: React.FC = () => {
     return students.filter(student => student.class === selectedClass);
   }, [students, selectedClass]);
 
+  const reportStudents = useMemo(() => {
+    if (!reportClass) {
+      return students;
+    }
+    return students.filter((student) => student.class === reportClass);
+  }, [students, reportClass]);
+
   // Fetch all results for filters
   const [allResultsForFilters, setAllResultsForFilters] = useState<Result[]>([]);
+  /** False until the lightweight marks fetch used for filter dropdowns finishes (success or fail). */
+  const [filterSourceLoaded, setFilterSourceLoaded] = useState(false);
 
   useEffect(() => {
     fetchAllResultsForFilters();
@@ -153,6 +174,8 @@ const Results: React.FC = () => {
       setAllResultsForFilters(response.data.data || []);
     } catch (error) {
       console.error('Error fetching results for filters:', error);
+    } finally {
+      setFilterSourceLoaded(true);
     }
   };
 
@@ -174,15 +197,23 @@ const Results: React.FC = () => {
     }
   };
 
-  // Get unique subjects, terms, academic years, grades
+  // Catalog + any subject string already on results
   const getUniqueSubjects = (): string[] => {
-    const subjects = new Set<string>();
-    allResultsForFilters.forEach(result => {
+    const subjects = new Set<string>(catalogSubjectNames);
+    allResultsForFilters.forEach((result) => {
       if (result.subject && result.subject.trim()) {
         subjects.add(result.subject.trim());
       }
     });
     return Array.from(subjects).sort();
+  };
+
+  const getFormSubjectOptions = (): string[] => {
+    const base = getUniqueSubjects();
+    if (editingResult?.subject?.trim() && !base.includes(editingResult.subject.trim())) {
+      return [...base, editingResult.subject.trim()].sort();
+    }
+    return base;
   };
 
   const getUniqueTerms = (): string[] => {
@@ -192,12 +223,26 @@ const Results: React.FC = () => {
   const getUniqueAcademicYears = (): string[] => {
     const years = new Set<string>();
     allResultsForFilters.forEach(result => {
-      if (result.academicYear && result.academicYear.trim()) {
-        years.add(result.academicYear);
+      const y = (result.academicYear || '').trim();
+      if (y) {
+        years.add(y);
       }
     });
     return Array.from(years).sort().reverse();
   };
+
+  const academicYearOptions = useMemo(() => {
+    return getUniqueAcademicYears();
+  }, [allResultsForFilters]);
+
+  const reportAcademicYearOptions = useMemo(() => {
+    const years = new Set<string>(academicYearOptions);
+    const configuredYear = (getDefaultAcademicYear() || '').trim();
+    if (configuredYear) {
+      years.add(configuredYear);
+    }
+    return Array.from(years).sort().reverse();
+  }, [academicYearOptions, getDefaultAcademicYear]);
 
   const getUniqueGrades = (): string[] => {
     return ['A+', 'A', 'B', 'C', 'D', 'F'];
@@ -208,11 +253,80 @@ const Results: React.FC = () => {
     setCurrentPage(1);
   }, [searchTerm, filterClass, filterSubject, filterTerm, filterAcademicYear, filterGrade, filterStatus, filterActive]);
 
+  // Results module requirement: current/default academic year selected by default.
+  // Wait for filter-source fetch + settings so getDefaultAcademicYear matches school config,
+  // then set the year once before the paginated list runs (avoids fetch without year / race).
   useEffect(() => {
-    fetchResults();
-  }, [currentPage, itemsPerPage, sortBy, sortOrder, searchTerm, filterClass, filterSubject, filterTerm, filterAcademicYear, filterGrade, filterStatus, filterActive]);
+    if (!filterSourceLoaded || settingsLoading) return;
+    if (academicYearFilterInitialized) return;
+    if (filterAcademicYear) {
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
 
-  const fetchResults = async () => {
+    const configuredDefaultYear = getDefaultAcademicYear();
+
+    if (academicYearOptions.length === 0) {
+      setFilterAcademicYear(configuredDefaultYear || '');
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const exact = academicYearOptions.find((y) => y === configuredDefaultYear);
+    if (exact) {
+      setFilterAcademicYear(exact);
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    // Support mixed formats in existing data, e.g. default "2026-2027" but records use "2026"
+    const startYear = configuredDefaultYear?.match(/^(\d{4})/)?.[1];
+    if (startYear) {
+      const sameStartYear = academicYearOptions.find(
+        (y) => y === startYear || y.startsWith(`${startYear}-`)
+      );
+      if (sameStartYear) {
+        setFilterAcademicYear(sameStartYear);
+        setAcademicYearFilterInitialized(true);
+        return;
+      }
+    }
+
+    setFilterAcademicYear(academicYearOptions[0]);
+    setAcademicYearFilterInitialized(true);
+  }, [
+    filterSourceLoaded,
+    settingsLoading,
+    academicYearFilterInitialized,
+    filterAcademicYear,
+    academicYearOptions,
+    getDefaultAcademicYear,
+  ]);
+
+  useEffect(() => {
+    if (!filterSourceLoaded || settingsLoading || !academicYearFilterInitialized) return;
+    const controller = new AbortController();
+    fetchResults(controller.signal);
+    return () => controller.abort();
+  }, [
+    filterSourceLoaded,
+    settingsLoading,
+    academicYearFilterInitialized,
+    currentPage,
+    itemsPerPage,
+    sortBy,
+    sortOrder,
+    searchTerm,
+    filterClass,
+    filterSubject,
+    filterTerm,
+    filterAcademicYear,
+    filterGrade,
+    filterStatus,
+    filterActive,
+  ]);
+
+  const fetchResults = async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
@@ -231,7 +345,7 @@ const Results: React.FC = () => {
       if (filterStatus) params.append('status', filterStatus);
       if (filterActive) params.append('isActive', filterActive);
 
-      const response = await api.get(`/api/exam-marks?${params.toString()}`);
+      const response = await api.get(`/api/exam-marks?${params.toString()}`, { signal });
       setResults(response.data.data || []);
       
       if (response.data.pagination) {
@@ -241,7 +355,8 @@ const Results: React.FC = () => {
         setTotalPages(1);
         setTotalItems(response.data.data?.length || 0);
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      if (axios.isCancel(error)) return;
       console.error('Error fetching results:', error);
       toast.error('Failed to fetch results');
       setResults([]);
@@ -406,6 +521,7 @@ const Results: React.FC = () => {
       const year = filterAcademicYear || new Date().getFullYear().toString();
       const response = await api.get(`/api/exam-marks/report/${studentId}/${year}`);
       const reportData = response.data.data;
+      const schoolName = getSchoolName();
 
       const printWindow = window.open('', '_blank');
       if (!printWindow) return;
@@ -418,6 +534,16 @@ const Results: React.FC = () => {
             <style>
               body { font-family: Arial, sans-serif; padding: 30px; }
               .header { text-align: center; border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 30px; }
+              .school-name {
+                margin: 0 0 10px;
+                color: #1e3a8a;
+                font-family: Georgia, "Times New Roman", serif;
+                font-size: 34px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                text-transform: uppercase;
+                text-align: center;
+              }
               .student-info { background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
               .term-section { margin-bottom: 30px; }
               table { width: 100%; border-collapse: collapse; margin: 15px 0; }
@@ -429,6 +555,7 @@ const Results: React.FC = () => {
           </head>
           <body>
             <div class="header">
+              <h1 class="school-name">${schoolName}</h1>
               <h1>Report Card</h1>
               <h2>Academic Year: ${reportData.academicYear}</h2>
             </div>
@@ -488,6 +615,173 @@ const Results: React.FC = () => {
     } catch (error: any) {
       console.error('Error generating report card:', error);
       toast.error(error.response?.data?.message || 'Failed to generate report card');
+    }
+  };
+
+  const openReportModal = () => {
+    setReportScope('student');
+    setReportStudentId('');
+    setReportClass(filterClass || '');
+    setReportTerm(filterTerm || '');
+    setReportAcademicYear(filterAcademicYear || getDefaultAcademicYear());
+    setShowReportModal(true);
+  };
+
+  const handleGenerateFilteredReport = async () => {
+    const year = (reportAcademicYear || '').trim();
+    if (!year) {
+      toast.error('Please select an academic year');
+      return;
+    }
+    if (reportScope === 'student' && !reportStudentId) {
+      toast.error('Please select a student');
+      return;
+    }
+    if (reportScope === 'class' && !reportClass) {
+      toast.error('Please select a class');
+      return;
+    }
+    if (reportScope === 'term' && !reportTerm) {
+      toast.error('Please select a term');
+      return;
+    }
+
+    try {
+      setReportSubmitting(true);
+      const params = new URLSearchParams({
+        limit: '1000',
+        sortBy: 'createdAt',
+        sortOrder: 'desc',
+        academicYear: year,
+      });
+      if (reportStudentId) params.append('studentId', reportStudentId);
+      if (reportClass) params.append('class', reportClass);
+      if (reportTerm) params.append('term', reportTerm);
+
+      const response = await api.get(`/api/exam-marks?${params.toString()}`);
+      const rows: Result[] = response.data?.data || [];
+
+      if (rows.length === 0) {
+        toast.error('No records found for the selected report filters');
+        return;
+      }
+
+      const sortedRows = [...rows].sort((a, b) => {
+        const studentCompare = (a.student?.name || '').localeCompare(b.student?.name || '');
+        if (studentCompare !== 0) return studentCompare;
+        const termCompare = (a.term || '').localeCompare(b.term || '');
+        if (termCompare !== 0) return termCompare;
+        return (a.subject || '').localeCompare(b.subject || '');
+      });
+
+      const total = sortedRows.length;
+      const passCount = sortedRows.filter((r) => r.status === 'Pass').length;
+      const failCount = sortedRows.filter((r) => r.status === 'Fail').length;
+      const avgPercentage = total > 0
+        ? sortedRows.reduce((sum, r) => sum + (Number(r.percentage) || 0), 0) / total
+        : 0;
+
+      const selectedStudent = students.find((s) => s._id === reportStudentId);
+      const schoolName = getSchoolName();
+      const reportTitle = reportScope === 'student'
+        ? 'Student Result Report'
+        : reportScope === 'class'
+          ? 'Class Result Report'
+          : 'Term Result Report';
+
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) return;
+
+      const printContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>${reportTitle}</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
+              .header { border-bottom: 2px solid #2563eb; margin-bottom: 18px; padding-bottom: 10px; }
+              .school-name {
+                margin: 0 0 8px;
+                color: #1e3a8a;
+                font-family: Georgia, "Times New Roman", serif;
+                font-size: 30px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                text-transform: uppercase;
+                text-align: center;
+              }
+              .header h1 { margin: 0 0 6px 0; }
+              .meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 20px; margin: 12px 0 18px; }
+              .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+              .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; background: #f9fafb; }
+              .label { font-size: 12px; color: #6b7280; }
+              .value { font-size: 18px; font-weight: 700; margin-top: 2px; }
+              table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+              th, td { border: 1px solid #e5e7eb; padding: 8px; font-size: 12px; text-align: left; }
+              th { background: #eff6ff; }
+              .footer { margin-top: 18px; font-size: 12px; color: #6b7280; text-align: center; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1 class="school-name">${schoolName}</h1>
+              <h1>${reportTitle}</h1>
+              <div class="meta">
+                <div><strong>Academic Year:</strong> ${year}</div>
+                <div><strong>Term:</strong> ${reportTerm || 'All Terms'}</div>
+                <div><strong>Class:</strong> ${reportClass || 'All Classes'}</div>
+                <div><strong>Student:</strong> ${selectedStudent ? `${selectedStudent.name} (${selectedStudent.rollNumber || 'N/A'})` : 'All Students'}</div>
+              </div>
+            </div>
+            <div class="summary">
+              <div class="card"><div class="label">Total Results</div><div class="value">${total}</div></div>
+              <div class="card"><div class="label">Pass</div><div class="value">${passCount}</div></div>
+              <div class="card"><div class="label">Fail</div><div class="value">${failCount}</div></div>
+              <div class="card"><div class="label">Average %</div><div class="value">${avgPercentage.toFixed(2)}%</div></div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Student</th>
+                  <th>Class</th>
+                  <th>Subject</th>
+                  <th>Term</th>
+                  <th>Marks</th>
+                  <th>Percentage</th>
+                  <th>Grade</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sortedRows.map((row) => `
+                  <tr>
+                    <td>${row.student?.name || ''} (${row.student?.rollNumber || 'N/A'})</td>
+                    <td>${row.class || ''}</td>
+                    <td>${row.subject || ''}</td>
+                    <td>${row.term || ''}</td>
+                    <td>${row.marksObtained ?? 0} / ${row.totalMarks ?? 0}</td>
+                    <td>${(Number(row.percentage) || 0).toFixed(2)}%</td>
+                    <td>${row.grade || ''}</td>
+                    <td>${row.status || ''}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div class="footer">Generated on ${new Date().toLocaleString()}</div>
+            <script>window.onload = function() { window.print(); };</script>
+          </body>
+        </html>
+      `;
+
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+      setShowReportModal(false);
+      toast.success('Report generated successfully!');
+    } catch (error: any) {
+      console.error('Error generating filtered report:', error);
+      toast.error(error.response?.data?.message || 'Failed to generate report');
+    } finally {
+      setReportSubmitting(false);
     }
   };
 
@@ -719,6 +1013,8 @@ const Results: React.FC = () => {
         </div>
         <div className="flex gap-2">
           <button
+            type="button"
+            title="View performance statistics summary"
             onClick={fetchStats}
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200"
           >
@@ -726,6 +1022,17 @@ const Results: React.FC = () => {
             View Statistics
           </button>
           <button
+            type="button"
+            title="Generate filtered result reports"
+            onClick={openReportModal}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200"
+          >
+            <FileText className="h-4 w-4" />
+            Generate Report
+          </button>
+          <button
+            type="button"
+            title="Add a new exam result"
             onClick={() => {
               setEditingResult(null);
               reset({
@@ -757,9 +1064,14 @@ const Results: React.FC = () => {
             <div className="p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-2xl font-bold text-gray-900">Performance Statistics</h2>
-                <button onClick={() => setShowStats(false)} className="text-gray-500 hover:text-gray-700">
+                <IconActionButton
+                  onClick={() => setShowStats(false)}
+                  tooltip="Close statistics"
+                  className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                  sizeClass="p-1 rounded-md text-2xl leading-none"
+                >
                   ×
-                </button>
+                </IconActionButton>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -794,6 +1106,130 @@ const Results: React.FC = () => {
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-xl w-full">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Generate Result Report</h2>
+                <IconActionButton
+                  onClick={() => setShowReportModal(false)}
+                  tooltip="Close dialog"
+                  className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                  sizeClass="p-1 rounded-md"
+                >
+                  ×
+                </IconActionButton>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Report Type *</label>
+                  <select
+                    value={reportScope}
+                    onChange={(e) => setReportScope(e.target.value as 'student' | 'class' | 'term')}
+                    className="input-field"
+                  >
+                    <option value="student">Specific Student</option>
+                    <option value="class">Class Wise</option>
+                    <option value="term">Term Wise</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year *</label>
+                  <select
+                    value={reportAcademicYear}
+                    onChange={(e) => setReportAcademicYear(e.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">Select academic year</option>
+                    {reportAcademicYearOptions.map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Class {reportScope === 'class' ? '*' : '(Optional)'}
+                  </label>
+                  <select
+                    value={reportClass}
+                    onChange={(e) => setReportClass(e.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">{reportScope === 'class' ? 'Select class' : 'All classes'}</option>
+                    {classNames.map((className) => (
+                      <option key={className} value={className}>
+                        {className}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Student {reportScope === 'student' ? '*' : '(Optional)'}
+                  </label>
+                  <select
+                    value={reportStudentId}
+                    onChange={(e) => setReportStudentId(e.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">{reportScope === 'student' ? 'Select student' : 'All students'}</option>
+                    {reportStudents.map((student) => (
+                      <option key={student._id} value={student._id}>
+                        {student.name} ({student.rollNumber})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Term {reportScope === 'term' ? '*' : '(Optional)'}
+                  </label>
+                  <select
+                    value={reportTerm}
+                    onChange={(e) => setReportTerm(e.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">{reportScope === 'term' ? 'Select term' : 'All terms'}</option>
+                    {getUniqueTerms().map((term) => (
+                      <option key={term} value={term}>
+                        {term}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGenerateFilteredReport}
+                  disabled={reportSubmitting}
+                  className="btn-primary disabled:opacity-50"
+                >
+                  {reportSubmitting ? 'Generating...' : 'Generate & Print'}
+                </button>
               </div>
             </div>
           </div>
@@ -854,11 +1290,14 @@ const Results: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
           <select
             value={filterAcademicYear}
-            onChange={(e) => setFilterAcademicYear(e.target.value)}
+            onChange={(e) => {
+              setAcademicYearFilterInitialized(true);
+              setFilterAcademicYear(e.target.value);
+            }}
             className="input-field"
           >
             <option value="">All Years</option>
-            {getUniqueAcademicYears().map((year) => (
+            {academicYearOptions.map((year) => (
               <option key={year} value={year}>
                 {year}
               </option>
@@ -1102,34 +1541,34 @@ const Results: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center space-x-2">
-                        <button
+                        <IconActionButton
                           onClick={() => handlePreview(result)}
-                          className="text-blue-600 hover:text-blue-900"
-                          title="View Profile"
+                          tooltip="View result details"
+                          className="text-blue-600 hover:text-blue-900 focus:ring-blue-300"
                         >
                           <Eye className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handleGenerateReportCard(result.student._id)}
-                          className="text-purple-600 hover:text-purple-900"
-                          title="Generate Report Card"
+                          tooltip="Generate Report Card"
+                          className="text-purple-600 hover:text-purple-900 focus:ring-purple-300"
                         >
                           <FileText className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handleEdit(result)}
-                          className="text-primary-600 hover:text-primary-900"
-                          title="Edit"
+                          tooltip="Edit Result"
+                          className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                         >
                           <Edit className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handleDelete(result._id)}
-                          className="text-red-600 hover:text-red-900"
-                          title="Delete"
+                          tooltip="Delete Result"
+                          className="text-red-600 hover:text-red-900 focus:ring-red-300"
                         >
                           <Trash2 className="h-4 w-4" />
-                        </button>
+                        </IconActionButton>
                       </div>
                     </td>
                   </tr>
@@ -1183,6 +1622,9 @@ const Results: React.FC = () => {
             <div>
               <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                 <button
+                  type="button"
+                  title="First page"
+                  aria-label="First page"
                   onClick={() => handlePageChange(1)}
                   disabled={currentPage === 1}
                   className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1190,6 +1632,9 @@ const Results: React.FC = () => {
                   <ChevronsLeft className="h-4 w-4" />
                 </button>
                 <button
+                  type="button"
+                  title="Previous page"
+                  aria-label="Previous page"
                   onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage === 1}
                   className="relative inline-flex items-center px-2 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1213,6 +1658,8 @@ const Results: React.FC = () => {
                     return (
                       <button
                         key={pageNum}
+                        type="button"
+                        title={`Go to page ${pageNum}`}
                         onClick={() => handlePageChange(pageNum)}
                         className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
                           currentPage === pageNum
@@ -1227,6 +1674,9 @@ const Results: React.FC = () => {
                 </div>
 
                 <button
+                  type="button"
+                  title="Next page"
+                  aria-label="Next page"
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage >= totalPages}
                   className="relative inline-flex items-center px-2 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1234,6 +1684,9 @@ const Results: React.FC = () => {
                   <ChevronRight className="h-4 w-4" />
                 </button>
                 <button
+                  type="button"
+                  title="Last page"
+                  aria-label="Last page"
                   onClick={() => handlePageChange(totalPages)}
                   disabled={currentPage >= totalPages}
                   className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1255,12 +1708,14 @@ const Results: React.FC = () => {
               <h2 className="text-2xl font-bold mb-6 text-gray-900">
                   {editingResult ? 'Edit Result' : 'Add New Result'}
                 </h2>
-                <button
+                <IconActionButton
                   onClick={handleCloseModal}
-                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                  tooltip="Close dialog"
+                  className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                  sizeClass="p-1 rounded-md text-2xl leading-none"
                 >
                   ×
-                </button>
+                </IconActionButton>
               </div>
 
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -1325,13 +1780,18 @@ const Results: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Subject *</label>
-                    <input
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Subject *</label>
+                    <select
                       {...register('subject', { required: 'Subject is required' })}
-                      type="text"
                       className="input-field"
-                      placeholder="Enter subject"
-                    />
+                    >
+                      <option value="">Select subject</option>
+                      {getFormSubjectOptions().map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
                     {errors.subject && <p className="text-red-500 text-sm mt-1">{errors.subject.message}</p>}
                   </div>
 
@@ -1440,12 +1900,14 @@ const Results: React.FC = () => {
                     type="button"
                     onClick={handleCloseModal}
                     className="btn-secondary"
+                    title="Discard changes and close"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     className="btn-primary"
+                    title={editingResult ? 'Save result changes' : 'Create result'}
                   >
                     {editingResult ? 'Update Result' : 'Add Result'}
                   </button>
@@ -1463,20 +1925,24 @@ const Results: React.FC = () => {
             <div className="p-6">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-2xl font-bold text-gray-900">Result Details</h2>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   <button
+                    type="button"
+                    title="Print result details"
                     onClick={handlePrintProfile}
                     className="flex items-center gap-1 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm"
                   >
                     <Printer className="h-4 w-4" />
                     Print
                   </button>
-                  <button
+                  <IconActionButton
                     onClick={() => setShowPreviewModal(false)}
-                    className="text-gray-500 hover:text-gray-700 text-2xl"
+                    tooltip="Close preview"
+                    className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                    sizeClass="p-1 rounded-md text-2xl leading-none"
                   >
                     ×
-                  </button>
+                  </IconActionButton>
                 </div>
               </div>
 

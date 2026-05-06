@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const fastcsv = require('fast-csv');
 const csvParser = require('csv-parser');
+const { searchRegexFromQuery, pickSortField, EXAM_MARK_LIST_SORT } = require('../utils/queryHelpers');
 
 // Configure multer for Excel/CSV import
 const multerExcel = multer({ 
@@ -46,7 +47,7 @@ router.get('/', async (req, res) => {
     const skip = (page - 1) * limit;
 
     // Sorting parameters
-    const sortBy = req.query.sortBy || 'createdAt';
+    const sortBy = pickSortField(req.query.sortBy, EXAM_MARK_LIST_SORT, 'createdAt');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
 
@@ -56,17 +57,19 @@ router.get('/', async (req, res) => {
 
     // Search filter (student name, subject, class, resultId, rollNumber)
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { subject: searchRegex },
-          { class: searchRegex },
-          { resultId: searchRegex },
-          { term: searchRegex },
-          { academicYear: searchRegex },
-          { grade: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { subject: searchRegex },
+            { class: searchRegex },
+            { resultId: searchRegex },
+            { term: searchRegex },
+            { academicYear: searchRegex },
+            { grade: searchRegex }
+          ]
+        });
+      }
     }
 
     // Class filter
@@ -200,17 +203,19 @@ router.get('/export', async (req, res) => {
     const andConditions = [];
 
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { subject: searchRegex },
-          { class: searchRegex },
-          { resultId: searchRegex },
-          { term: searchRegex },
-          { academicYear: searchRegex },
-          { grade: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { subject: searchRegex },
+            { class: searchRegex },
+            { resultId: searchRegex },
+            { term: searchRegex },
+            { academicYear: searchRegex },
+            { grade: searchRegex }
+          ]
+        });
+      }
     }
 
     if (req.query.class) filter.class = req.query.class;

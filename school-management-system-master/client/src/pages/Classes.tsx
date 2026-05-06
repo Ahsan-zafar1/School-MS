@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { 
   Plus, 
@@ -25,9 +25,18 @@ import {
   CheckSquare,
   Square
 } from 'lucide-react';
+import axios from 'axios';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { saveAs } from 'file-saver';
+import { useSubjects } from '../hooks/useSubjects';
+import { useSettings } from '../contexts/SettingsContext';
+import PromoteStudentsModal, {
+  type PromotionFormValues,
+  type PromotionPreviewState,
+  type PromotionCandidatePreview,
+} from '../components/PromoteStudentsModal';
+import IconActionButton from '../components/IconActionButton';
 
 interface Class {
   _id: string;
@@ -64,6 +73,14 @@ interface ClassForm {
   isActive: string;
 }
 
+interface ClassStudent {
+  _id: string;
+  name: string;
+  rollNumber?: string;
+  email?: string;
+  phone?: string;
+}
+
 const Classes: React.FC = () => {
   const [classes, setClasses] = useState<Class[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
@@ -72,12 +89,33 @@ const Classes: React.FC = () => {
   const [editingClass, setEditingClass] = useState<Class | null>(null);
   const [previewClass, setPreviewClass] = useState<Class | null>(null);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [showClassStudentsModal, setShowClassStudentsModal] = useState(false);
+  const [classStudentsLoading, setClassStudentsLoading] = useState(false);
+  const [classStudentsTarget, setClassStudentsTarget] = useState<Class | null>(null);
+  const [classStudentsList, setClassStudentsList] = useState<ClassStudent[]>([]);
+  const [classStudentsSelectedIds, setClassStudentsSelectedIds] = useState<string[]>([]);
+  const [showPromoteModal, setShowPromoteModal] = useState(false);
+  const [promoteLoading, setPromoteLoading] = useState(false);
+  const [promoteDryRunLoading, setPromoteDryRunLoading] = useState(false);
+  const [promotionMode, setPromotionMode] = useState<'class' | 'students'>('class');
+  const [promotionStudentIds, setPromotionStudentIds] = useState<string[]>([]);
+  const [promotionPreview, setPromotionPreview] = useState<PromotionPreviewState | null>(null);
+  const [promotionForm, setPromotionForm] = useState<PromotionFormValues>({
+    fromClass: '',
+    toClass: '',
+    toSection: '',
+    fromAcademicYear: '',
+    toAcademicYear: String(new Date().getFullYear()),
+    includeInactive: false,
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterGrade, setFilterGrade] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterAcademicYear, setFilterAcademicYear] = useState('');
+  const [academicYearFilterInitialized, setAcademicYearFilterInitialized] = useState(false);
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+  const { getDefaultAcademicYear, loading: settingsLoading } = useSettings();
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -98,6 +136,7 @@ const Classes: React.FC = () => {
     formState: { errors },
   } = useForm<ClassForm>();
 
+  const { subjectNames: catalogSubjectNames } = useSubjects();
   const watchedSubjects = watch('subjects', []);
 
   // Reset to page 1 when filters change
@@ -107,11 +146,30 @@ const Classes: React.FC = () => {
 
   // Fetch all classes to get unique grades and academic years (without pagination)
   const [allClassesForFilters, setAllClassesForFilters] = useState<Class[]>([]);
+  const [filterSourceLoaded, setFilterSourceLoaded] = useState(false);
 
   useEffect(() => {
-    fetchClasses();
     fetchTeachers();
-  }, [currentPage, itemsPerPage, sortBy, sortOrder, searchTerm, filterGrade, filterStatus, filterAcademicYear]);
+  }, []);
+
+  useEffect(() => {
+    if (!filterSourceLoaded || settingsLoading || !academicYearFilterInitialized) return;
+    const controller = new AbortController();
+    fetchClasses(controller.signal);
+    return () => controller.abort();
+  }, [
+    filterSourceLoaded,
+    settingsLoading,
+    academicYearFilterInitialized,
+    currentPage,
+    itemsPerPage,
+    sortBy,
+    sortOrder,
+    searchTerm,
+    filterGrade,
+    filterStatus,
+    filterAcademicYear,
+  ]);
 
   // Fetch all classes for filters separately (only once or when classes are updated)
   useEffect(() => {
@@ -134,59 +192,27 @@ const Classes: React.FC = () => {
       const response = await api.get('/api/classes?limit=1000&sortBy=name&sortOrder=asc');
       const fetchedClasses = response.data.data || [];
       setAllClassesForFilters(fetchedClasses);
-      // Debug log to help troubleshoot
-      if (fetchedClasses.length > 0) {
-        console.log('Classes loaded for filters:', fetchedClasses.map((c: Class) => ({ 
-          name: c.name, 
-          grade: c.grade || 'no grade',
-          id: c._id 
-        })));
-      }
     } catch (error) {
       console.error('Error fetching classes for filters:', error);
+    } finally {
+      setFilterSourceLoaded(true);
     }
   };
 
   // Get unique grades from all classes
   const getUniqueGrades = (): string[] => {
+    // In this filter, user wants exact generated class names (e.g. "1-A", "KG-B").
     const grades = new Set<string>();
-    allClassesForFilters.forEach(cls => {
-      // If grade field exists and is not empty, use it
-      if (cls.grade && cls.grade.trim()) {
-        grades.add(cls.grade.trim());
-      } else if (cls.name) {
-        // If no grade field, try to extract grade from class name
-        // Examples: "10A" -> "10", "KG-A" -> "KG", "Nursary" -> "Nursary", "1" -> "1"
-        const name = cls.name.trim();
-        // Try to extract numeric grade (e.g., "10A" -> "10")
-        const numericMatch = name.match(/^(\d+)/);
-        if (numericMatch) {
-          grades.add(numericMatch[1]);
-        } else {
-          // If no numeric grade, use the class name itself (for KG, Nursery, etc.)
-          // Only add if it's a reasonable length (likely a grade identifier)
-          // Increased limit to 15 to include names like "Nursary", "Play Group", etc.
-          if (name.length <= 15 && name.length > 0) {
-            grades.add(name);
-          }
-        }
+    allClassesForFilters.forEach((cls) => {
+      const className = (cls.name || '').trim();
+      if (className) {
+        grades.add(className);
       }
     });
-    const sortedGrades = Array.from(grades).sort((a, b) => {
-      // Sort numerically if both are numbers, otherwise alphabetically
-      const numA = parseInt(a);
-      const numB = parseInt(b);
-      if (!isNaN(numA) && !isNaN(numB)) {
-        return numA - numB;
-      }
-      // Put numeric grades first, then alphabetical
-      if (!isNaN(numA)) return -1;
-      if (!isNaN(numB)) return 1;
-      return a.localeCompare(b);
+
+    return Array.from(grades).sort((a, b) => {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
     });
-    // Debug log
-    console.log('Extracted grades for filter:', sortedGrades);
-    return sortedGrades;
   };
 
   // Get unique academic years from all classes
@@ -200,7 +226,67 @@ const Classes: React.FC = () => {
     return Array.from(years).sort().reverse(); // Most recent first
   };
 
-  const fetchClasses = async () => {
+  const academicYearOptions = useMemo(() => getUniqueAcademicYears(), [allClassesForFilters]);
+  const classNameOptions = useMemo(() => getUniqueGrades(), [allClassesForFilters]);
+  const promotionSectionOptions = useMemo(() => {
+    const sections = new Set<string>();
+    allClassesForFilters.forEach((cls) => {
+      if (cls.name === promotionForm.toClass && cls.section) {
+        sections.add(cls.section.trim());
+      }
+    });
+    return Array.from(sections).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [allClassesForFilters, promotionForm.toClass]);
+
+  // Auto-select current/default year once (do not override manual selection).
+  // Wait for filter-source fetch + settings so the default matches school config.
+  useEffect(() => {
+    if (!filterSourceLoaded || settingsLoading) return;
+    if (academicYearFilterInitialized) return;
+    if (filterAcademicYear) {
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const configuredDefaultYear = getDefaultAcademicYear();
+
+    if (academicYearOptions.length === 0) {
+      setFilterAcademicYear(configuredDefaultYear || '');
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const exact = academicYearOptions.find((y) => y === configuredDefaultYear);
+    if (exact) {
+      setFilterAcademicYear(exact);
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const startYear = configuredDefaultYear?.match(/^(\d{4})/)?.[1];
+    if (startYear) {
+      const sameStartYear = academicYearOptions.find(
+        (y) => y === startYear || y.startsWith(`${startYear}-`)
+      );
+      if (sameStartYear) {
+        setFilterAcademicYear(sameStartYear);
+        setAcademicYearFilterInitialized(true);
+        return;
+      }
+    }
+
+    setFilterAcademicYear(academicYearOptions[0]);
+    setAcademicYearFilterInitialized(true);
+  }, [
+    filterSourceLoaded,
+    settingsLoading,
+    academicYearFilterInitialized,
+    filterAcademicYear,
+    academicYearOptions,
+    getDefaultAcademicYear,
+  ]);
+
+  const fetchClasses = async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
@@ -215,7 +301,7 @@ const Classes: React.FC = () => {
       if (filterStatus) params.append('status', filterStatus);
       if (filterAcademicYear) params.append('academicYear', filterAcademicYear);
 
-      const response = await api.get(`/api/classes?${params.toString()}`);
+      const response = await api.get(`/api/classes?${params.toString()}`, { signal });
       setClasses(response.data.data || []);
       
       if (response.data.pagination) {
@@ -225,7 +311,8 @@ const Classes: React.FC = () => {
         setTotalPages(1);
         setTotalItems(response.data.data?.length || 0);
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      if (axios.isCancel(error)) return;
       console.error('Error fetching classes:', error);
       toast.error('Failed to fetch classes');
       setClasses([]);
@@ -255,8 +342,24 @@ const Classes: React.FC = () => {
       };
 
       if (editingClass) {
-        await api.put(`/api/classes/${editingClass._id}`, classData);
-        toast.success('Class updated successfully!');
+        const res = await api.put(`/api/classes/${editingClass._id}`, classData);
+        const cascade = res.data?.classNameCascade;
+        if (cascade && !cascade.error) {
+          const parts = [
+            cascade.studentsModified && `${cascade.studentsModified} students`,
+            cascade.examsModified && `${cascade.examsModified} exams`,
+            cascade.examMarksModified && `${cascade.examMarksModified} exam marks`,
+            cascade.feesModified && `${cascade.feesModified} fees`,
+            cascade.attendanceModified && `${cascade.attendanceModified} attendance`,
+          ].filter(Boolean);
+          toast.success(
+            parts.length
+              ? `Class updated. Linked records updated: ${parts.join(', ')}.`
+              : 'Class updated successfully!'
+          );
+        } else {
+          toast.success('Class updated successfully!');
+        }
       } else {
         await api.post('/api/classes', classData);
         toast.success('Class added successfully!');
@@ -497,6 +600,126 @@ const Classes: React.FC = () => {
     setShowPreviewModal(true);
   };
 
+  const handleViewClassStudents = async (classItem: Class) => {
+    setClassStudentsTarget(classItem);
+    setShowClassStudentsModal(true);
+    setClassStudentsLoading(true);
+    setClassStudentsSelectedIds([]);
+    try {
+      const response = await api.get(
+        `/api/students/class/${encodeURIComponent(classItem.name)}?classId=${classItem._id}`
+      );
+      setClassStudentsList(response.data?.data || []);
+    } catch (error) {
+      console.error('Error fetching class students:', error);
+      setClassStudentsList((classItem.students || []) as ClassStudent[]);
+      toast.error('Could not load latest class students. Showing available data.');
+    } finally {
+      setClassStudentsLoading(false);
+    }
+  };
+
+  const openPromoteClassModal = (classItem: Class) => {
+    setPromotionMode('class');
+    setPromotionStudentIds([]);
+    setPromotionPreview(null);
+    setPromotionForm((prev) => ({
+      ...prev,
+      fromClass: classItem.name || '',
+      toClass: '',
+      toSection: '',
+      fromAcademicYear: classItem.academicYear || prev.fromAcademicYear || '',
+    }));
+    setShowPromoteModal(true);
+  };
+
+  const openPromoteSelectedStudentsModal = () => {
+    if (!classStudentsTarget || classStudentsSelectedIds.length === 0) {
+      toast.error('Please select student(s) first');
+      return;
+    }
+    setPromotionMode('students');
+    setPromotionStudentIds(classStudentsSelectedIds);
+    setPromotionPreview(null);
+    setPromotionForm((prev) => ({
+      ...prev,
+      fromClass: classStudentsTarget.name || '',
+      toClass: '',
+      toSection: '',
+      fromAcademicYear: classStudentsTarget.academicYear || prev.fromAcademicYear || '',
+    }));
+    setShowPromoteModal(true);
+  };
+
+  const runPromotion = async (dryRun: boolean) => {
+    if (!promotionForm.toClass) {
+      toast.error('Please select To Class');
+      return;
+    }
+    if (promotionMode === 'class' && !promotionForm.fromClass) {
+      toast.error('Please select From Class');
+      return;
+    }
+    if (promotionMode === 'class' && promotionForm.fromClass === promotionForm.toClass) {
+      toast.error('From Class and To Class must be different');
+      return;
+    }
+    if (promotionMode === 'students' && promotionStudentIds.length === 0) {
+      toast.error('No students selected');
+      return;
+    }
+
+    try {
+      if (dryRun) setPromoteDryRunLoading(true);
+      else setPromoteLoading(true);
+
+      const payload: any = {
+        toClass: promotionForm.toClass,
+        toSection: promotionForm.toSection,
+        fromAcademicYear: promotionForm.fromAcademicYear,
+        toAcademicYear: promotionForm.toAcademicYear,
+        includeInactive: promotionForm.includeInactive,
+        dryRun,
+      };
+      if (promotionMode === 'class') {
+        payload.fromClass = promotionForm.fromClass;
+      } else {
+        payload.studentIds = promotionStudentIds;
+        if (promotionForm.fromClass) payload.fromClass = promotionForm.fromClass;
+      }
+
+      const res = await api.post('/api/students/promote-class', payload);
+      if (dryRun) {
+        setPromotionPreview({
+          candidateCount: Number(res.data?.candidateCount || 0),
+          candidates: (res.data?.candidates || []) as PromotionCandidatePreview[],
+        });
+        toast.success(`Dry run complete. ${res.data?.candidateCount || 0} candidate(s).`);
+      } else {
+        const summary = res.data?.summary;
+        toast.success(
+          summary
+            ? `Promoted: ${summary.promotedCount}, Skipped: ${summary.skippedCount}`
+            : (res.data?.message || 'Promotion completed')
+        );
+        setShowPromoteModal(false);
+        setPromotionStudentIds([]);
+        setPromotionPreview(null);
+        setClassStudentsSelectedIds([]);
+        fetchClasses();
+        fetchAllClassesForFilters();
+        if (classStudentsTarget) {
+          handleViewClassStudents(classStudentsTarget);
+        }
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Promotion failed');
+    } finally {
+      if (dryRun) setPromoteDryRunLoading(false);
+      else setPromoteLoading(false);
+    }
+  };
+
   const handlePrintProfile = () => {
     if (!previewClass) return;
 
@@ -626,6 +849,8 @@ const Classes: React.FC = () => {
           <p className="text-gray-600">Manage class information and schedules</p>
         </div>
         <button
+          type="button"
+          title="Open form to add a new class"
           onClick={() => {
             handleCloseModal();
             setShowModal(true);
@@ -673,11 +898,14 @@ const Classes: React.FC = () => {
           </select>
           <select
             value={filterAcademicYear}
-            onChange={(e) => setFilterAcademicYear(e.target.value)}
+            onChange={(e) => {
+              setAcademicYearFilterInitialized(true);
+              setFilterAcademicYear(e.target.value);
+            }}
             className="input-field"
           >
             <option value="">All Academic Years</option>
-            {getUniqueAcademicYears().map((year) => (
+            {academicYearOptions.map((year) => (
               <option key={year} value={year}>
                 {year}
               </option>
@@ -690,7 +918,10 @@ const Classes: React.FC = () => {
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-gray-700">Data Management</div>
             <div className="flex gap-2 flex-wrap">
-              <label className="relative inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg cursor-pointer hover:from-purple-600 hover:to-pink-600 transition-all duration-200 shadow-md hover:shadow-lg">
+              <label
+                title="Import classes from CSV or Excel"
+                className="relative inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg cursor-pointer hover:from-purple-600 hover:to-pink-600 transition-all duration-200 shadow-md hover:shadow-lg"
+              >
                 <Upload className="h-4 w-4" />
                 <span>Import</span>
                 <input
@@ -701,6 +932,8 @@ const Classes: React.FC = () => {
                 />
               </label>
               <button
+                type="button"
+                title="Download class list as CSV"
                 onClick={() => handleExport('csv')}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg hover:from-blue-600 hover:to-cyan-600 transition-all duration-200 shadow-md hover:shadow-lg"
               >
@@ -708,6 +941,8 @@ const Classes: React.FC = () => {
                 <span>Export CSV</span>
               </button>
               <button
+                type="button"
+                title="Download class list as Excel"
                 onClick={() => handleExport('excel')}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg hover:from-green-600 hover:to-emerald-600 transition-all duration-200 shadow-md hover:shadow-lg"
               >
@@ -728,18 +963,24 @@ const Classes: React.FC = () => {
             </span>
             <div className="flex gap-2">
               <button
+                type="button"
+                title="Set selected classes to active"
                 onClick={() => handleBulkUpdate(true)}
                 className="btn-secondary text-sm"
               >
                 Activate
               </button>
               <button
+                type="button"
+                title="Set selected classes to inactive"
                 onClick={() => handleBulkUpdate(false)}
                 className="btn-secondary text-sm"
               >
                 Deactivate
               </button>
               <button
+                type="button"
+                title="Permanently delete selected classes"
                 onClick={handleBulkDelete}
                 className="btn-secondary text-sm text-red-600 hover:text-red-700"
               >
@@ -754,6 +995,8 @@ const Classes: React.FC = () => {
       <div className="flex justify-end">
         <div className="flex gap-2 bg-gray-100 p-1 rounded-lg">
           <button
+            type="button"
+            title="Show classes as cards"
             onClick={() => setViewMode('grid')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               viewMode === 'grid'
@@ -764,6 +1007,8 @@ const Classes: React.FC = () => {
             Grid View
           </button>
           <button
+            type="button"
+            title="Show classes as a table"
             onClick={() => setViewMode('table')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               viewMode === 'table'
@@ -788,9 +1033,20 @@ const Classes: React.FC = () => {
               <div key={classItem._id} className="card hover:shadow-lg transition-shadow">
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">{classItem.name}</h3>
+                    <h3 className="text-lg font-semibold text-gray-900">
+                      {classItem.name}
+                      {classItem.section && (
+                        <span className="ml-2 text-base font-normal text-danger-500">
+                          ({classItem.section})
+                        </span>
+                      )}
+                    </h3>
+               
                     {classItem.classId && (
                       <p className="text-xs text-gray-500">ID: {classItem.classId}</p>
+                    )}
+                    {classItem.section && (
+                      <p className="text-xs text-gray-500">Section: {classItem.section}</p>
                     )}
                     {classItem.description && (
                       <p className="text-sm text-gray-600 mt-1">{classItem.description}</p>
@@ -802,7 +1058,7 @@ const Classes: React.FC = () => {
                     {classItem.isActive ? 'Active' : 'Inactive'}
                   </span>
                 </div>
-
+                
                 <div className="space-y-3">
                   {classItem.classTeacher && (
                     <div className="flex items-center text-sm text-gray-600">
@@ -859,27 +1115,41 @@ const Classes: React.FC = () => {
                   <div className="flex items-center justify-between pt-3 border-t border-gray-200">
                     <span className="text-sm text-gray-500">{classItem.academicYear}</span>
                     <div className="flex items-center space-x-2">
-                      <button
+                      <IconActionButton
                         onClick={() => handlePreview(classItem)}
-                        className="text-primary-600 hover:text-primary-900 p-1"
-                        title="View Profile"
+                        tooltip="View Profile"
+                        className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                       >
                         <Eye className="h-4 w-4" />
-                      </button>
-                      <button
+                      </IconActionButton>
+                      <IconActionButton
                         onClick={() => handleEdit(classItem)}
-                        className="text-primary-600 hover:text-primary-900 p-1"
-                        title="Edit"
+                        tooltip="Edit Class"
+                        className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                       >
                         <Edit className="h-4 w-4" />
-                      </button>
-                      <button
+                      </IconActionButton>
+                      <IconActionButton
+                        onClick={() => openPromoteClassModal(classItem)}
+                        tooltip="Promote Class"
+                        className="text-amber-600 hover:text-amber-900 focus:ring-amber-300"
+                      >
+                        <GraduationCap className="h-4 w-4" />
+                      </IconActionButton>
+                      <IconActionButton
+                        onClick={() => handleViewClassStudents(classItem)}
+                        tooltip="View Students in Class"
+                        className="text-indigo-600 hover:text-indigo-900 focus:ring-indigo-300"
+                      >
+                        <Users className="h-4 w-4" />
+                      </IconActionButton>
+                      <IconActionButton
                         onClick={() => handleDelete(classItem._id)}
-                        className="text-red-600 hover:text-red-900 p-1"
-                        title="Delete"
+                        tooltip="Delete Class"
+                        className="text-red-600 hover:text-red-900 focus:ring-red-300"
                       >
                         <Trash2 className="h-4 w-4" />
-                      </button>
+                      </IconActionButton>
                     </div>
                   </div>
                 </div>
@@ -895,12 +1165,14 @@ const Classes: React.FC = () => {
                 <th className="px-4 py-3 text-left">
                   <input
                     type="checkbox"
+                    title="Select all classes on this page"
                     checked={classes.length > 0 && classes.every(c => selectedClasses.includes(c._id))}
                     onChange={handleSelectAll}
                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
                 </th>
                 <th 
+                  title="Sort by name"
                   className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort('name')}
                 >
@@ -913,6 +1185,7 @@ const Classes: React.FC = () => {
                   Tracking ID
                 </th>
                 <th 
+                  title="Sort by grade"
                   className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort('grade')}
                 >
@@ -1003,27 +1276,41 @@ const Classes: React.FC = () => {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center space-x-2">
-                          <button
+                          <IconActionButton
                             onClick={() => handlePreview(classItem)}
-                            className="text-primary-600 hover:text-primary-900 p-1"
-                            title="View Profile"
+                            tooltip="View Profile"
+                            className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                           >
                             <Eye className="h-4 w-4" />
-                          </button>
-                          <button
+                          </IconActionButton>
+                          <IconActionButton
                             onClick={() => handleEdit(classItem)}
-                            className="text-primary-600 hover:text-primary-900 p-1"
-                            title="Edit"
+                            tooltip="Edit Class"
+                            className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
                           >
                             <Edit className="h-4 w-4" />
-                          </button>
-                          <button
+                          </IconActionButton>
+                          <IconActionButton
+                            onClick={() => openPromoteClassModal(classItem)}
+                            tooltip="Promote Class"
+                            className="text-amber-600 hover:text-amber-900 focus:ring-amber-300"
+                          >
+                            <GraduationCap className="h-4 w-4" />
+                          </IconActionButton>
+                          <IconActionButton
+                            onClick={() => handleViewClassStudents(classItem)}
+                            tooltip="View Students in Class"
+                            className="text-indigo-600 hover:text-indigo-900 focus:ring-indigo-300"
+                          >
+                            <Users className="h-4 w-4" />
+                          </IconActionButton>
+                          <IconActionButton
                             onClick={() => handleDelete(classItem._id)}
-                            className="text-red-600 hover:text-red-900 p-1"
-                            title="Delete"
+                            tooltip="Delete Class"
+                            className="text-red-600 hover:text-red-900 focus:ring-red-300"
                           >
                             <Trash2 className="h-4 w-4" />
-                          </button>
+                          </IconActionButton>
                         </div>
                       </td>
                     </tr>
@@ -1062,6 +1349,9 @@ const Classes: React.FC = () => {
               </span>
               <div className="flex items-center gap-1">
                 <button
+                  type="button"
+                  title="First page"
+                  aria-label="First page"
                   onClick={() => handlePageChange(1)}
                   disabled={currentPage === 1}
                   className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1069,6 +1359,9 @@ const Classes: React.FC = () => {
                   <ChevronsLeft className="h-4 w-4" />
                 </button>
                 <button
+                  type="button"
+                  title="Previous page"
+                  aria-label="Previous page"
                   onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage === 1}
                   className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1090,6 +1383,8 @@ const Classes: React.FC = () => {
                     return (
                       <button
                         key={pageNum}
+                        type="button"
+                        title={`Go to page ${pageNum}`}
                         onClick={() => handlePageChange(pageNum)}
                         className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
                           currentPage === pageNum
@@ -1103,6 +1398,9 @@ const Classes: React.FC = () => {
                   })}
                 </div>
                 <button
+                  type="button"
+                  title="Next page"
+                  aria-label="Next page"
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage === totalPages}
                   className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1110,6 +1408,9 @@ const Classes: React.FC = () => {
                   <ChevronRight className="h-4 w-4" />
                 </button>
                 <button
+                  type="button"
+                  title="Last page"
+                  aria-label="Last page"
                   onClick={() => handlePageChange(totalPages)}
                   disabled={currentPage === totalPages}
                   className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1130,15 +1431,16 @@ const Classes: React.FC = () => {
               <h3 className="text-lg font-medium text-gray-900">
                 {editingClass ? 'Edit Class' : 'Add New Class'}
               </h3>
-              <button
+              <IconActionButton
                 onClick={handleCloseModal}
-                className="text-gray-400 hover:text-gray-600"
+                tooltip="Close dialog"
+                className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
               >
-                <span className="sr-only">Close</span>
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </IconActionButton>
             </div>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -1160,6 +1462,18 @@ const Classes: React.FC = () => {
                     className="input-field"
                   >
                     <option value="">Select grade</option>
+                    <option value="nursury">Nursury</option>
+                    <option value="play">Play</option>
+                    <option value="prep">Prep</option>
+                    <option value="kg">KG</option>
+                    <option value="1">Grade 1</option>
+                    <option value="2">Grade 2</option>
+                    <option value="3">Grade 3</option>
+                    <option value="4">Grade 4</option>
+                    <option value="5">Grade 5</option>
+                    <option value="6">Grade 6</option>
+                    <option value="7">Grade 7</option>
+                    <option value="8">Grade 8</option>
                     <option value="9">Grade 9</option>
                     <option value="10">Grade 10</option>
                     <option value="11">Grade 11</option>
@@ -1239,19 +1553,28 @@ const Classes: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">Subjects</label>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">
-                  {['Mathematics', 'Physics', 'Chemistry', 'Biology', 'English', 'History', 'Geography', 'Computer Science', 'Art', 'Music', 'Physical Education'].map((subject) => (
-                    <label key={subject} className="flex items-center">
-                      <input
-                        type="checkbox"
-                        value={subject}
-                        {...register('subjects')}
-                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                      />
-                      <span className="ml-2 text-sm text-gray-700">{subject}</span>
-                    </label>
-                  ))}
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Subjects</label>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Managed in Subjects. Add or reorder subjects from the admin menu.</p>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 max-h-48 overflow-y-auto">
+                  {(() => {
+                    const names = new Set(catalogSubjectNames);
+                    (editingClass?.subjects || []).forEach((s) => {
+                      if (s.name?.trim()) names.add(s.name.trim());
+                    });
+                    return Array.from(names)
+                      .sort()
+                      .map((subject) => (
+                        <label key={subject} className="flex items-center">
+                          <input
+                            type="checkbox"
+                            value={subject}
+                            {...register('subjects')}
+                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          />
+                          <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{subject}</span>
+                        </label>
+                      ));
+                  })()}
                 </div>
               </div>
 
@@ -1270,12 +1593,14 @@ const Classes: React.FC = () => {
                   type="button"
                   onClick={handleCloseModal}
                   className="btn-secondary"
+                  title="Discard changes and close"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="btn-primary"
+                  title={editingClass ? 'Save changes to this class' : 'Create class'}
                 >
                   {editingClass ? 'Update Class' : 'Add Class'}
                 </button>
@@ -1285,6 +1610,148 @@ const Classes: React.FC = () => {
         </div>
       )}
 
+      {/* Class Students Modal */}
+      {showClassStudentsModal && classStudentsTarget && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Students in {classStudentsTarget.name}
+                {classStudentsTarget.section ? ` (${classStudentsTarget.section})` : ''}
+              </h3>
+              <IconActionButton
+                onClick={() => {
+                  setShowClassStudentsModal(false);
+                  setClassStudentsTarget(null);
+                  setClassStudentsList([]);
+                  setClassStudentsSelectedIds([]);
+                }}
+                tooltip="Close dialog"
+                className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md"
+              >
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </IconActionButton>
+            </div>
+
+            {classStudentsLoading ? (
+              <div className="py-10 text-center text-gray-500">Loading students...</div>
+            ) : classStudentsList.length === 0 ? (
+              <div className="py-10 text-center text-gray-500">No students found in this class.</div>
+            ) : (
+              <div className="overflow-x-auto border rounded-md">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                        <input
+                          type="checkbox"
+                          title="Select all students in list"
+                          checked={classStudentsList.length > 0 && classStudentsSelectedIds.length === classStudentsList.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setClassStudentsSelectedIds(classStudentsList.map((s) => s._id));
+                            } else {
+                              setClassStudentsSelectedIds([]);
+                            }
+                          }}
+                        />
+                      </th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Roll Number</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {classStudentsList.map((student) => (
+                      <tr key={student._id}>
+                        <td className="px-4 py-2 text-sm text-gray-700">
+                          <input
+                            type="checkbox"
+                            title={`Select ${student.name}`}
+                            checked={classStudentsSelectedIds.includes(student._id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setClassStudentsSelectedIds((prev) => [...prev, student._id]);
+                              } else {
+                                setClassStudentsSelectedIds((prev) => prev.filter((id) => id !== student._id));
+                              }
+                            }}
+                          />
+                        </td>
+                        <td className="px-4 py-2 text-sm text-gray-900">{student.name}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{student.rollNumber || '-'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{student.email || '-'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{student.phone || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-4">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  title="Promote every student in this class"
+                  onClick={() => classStudentsTarget && openPromoteClassModal(classStudentsTarget)}
+                  className="btn-secondary"
+                >
+                  Promote Whole Class
+                </button>
+                <button
+                  type="button"
+                  title="Promote only checked students"
+                  onClick={openPromoteSelectedStudentsModal}
+                  className="btn-secondary"
+                  disabled={classStudentsSelectedIds.length === 0}
+                >
+                  Promote Selected ({classStudentsSelectedIds.length})
+                </button>
+              </div>
+              <button
+                type="button"
+                title="Close student list"
+                onClick={() => {
+                  setShowClassStudentsModal(false);
+                  setClassStudentsTarget(null);
+                  setClassStudentsList([]);
+                  setClassStudentsSelectedIds([]);
+                }}
+                className="btn-secondary"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <PromoteStudentsModal
+        open={showPromoteModal}
+        mode={promotionMode}
+        selectedStudentCount={promotionStudentIds.length}
+        form={promotionForm}
+        onFormChange={(partial) => setPromotionForm((p) => ({ ...p, ...partial }))}
+        classNameOptions={classNameOptions}
+        sectionOptionsForToClass={promotionSectionOptions}
+        fromClassControl="readonly"
+        promotionPreview={promotionPreview}
+        promoteLoading={promoteLoading}
+        promoteDryRunLoading={promoteDryRunLoading}
+        onClose={() => {
+          setShowPromoteModal(false);
+          setPromotionPreview(null);
+          setPromotionStudentIds([]);
+        }}
+        onDryRun={() => runPromotion(true)}
+        onPromote={() => runPromotion(false)}
+      />
+
       {/* Profile Preview Modal */}
       {showPreviewModal && previewClass && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -1292,22 +1759,24 @@ const Classes: React.FC = () => {
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">Class Profile</h3>
               <div className="flex gap-2">
-                <button
+                <IconActionButton
                   onClick={handlePrintProfile}
-                  className="text-primary-600 hover:text-primary-900 p-1"
-                  title="Print Profile"
+                  tooltip="Print Profile"
+                  className="text-primary-600 hover:text-primary-900 focus:ring-primary-300"
+                  sizeClass="p-1 rounded-md"
                 >
                   <Printer className="h-5 w-5" />
-                </button>
-                <button
+                </IconActionButton>
+                <IconActionButton
                   onClick={() => setShowPreviewModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  tooltip="Close profile preview"
+                  className="text-gray-400 hover:text-gray-600 focus:ring-gray-400"
+                  sizeClass="p-1 rounded-md"
                 >
-                  <span className="sr-only">Close</span>
                   <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
-                </button>
+                </IconActionButton>
               </div>
             </div>
 

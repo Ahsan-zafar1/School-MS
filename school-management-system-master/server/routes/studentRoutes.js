@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const Student = require('../models/Student');
+const Class = require('../models/Class');
+const StudentEnrollmentHistory = require('../models/StudentEnrollmentHistory');
 const { protect } = require('../middleware/auth');
+const { createPortalUserForStudent } = require('../helpers/createPortalUser');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -10,6 +13,7 @@ const csvParser = require('csv-parser');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
+const { searchRegexFromQuery, pickSortField, STUDENT_LIST_SORT } = require('../utils/queryHelpers');
 const multerCsv = multer({ dest: 'tmp/csv/' });
 const multerExcel = multer({ 
   dest: 'tmp/excel/',
@@ -67,6 +71,15 @@ const generateStudentId = async () => {
   console.log(`Generated student ID: ${generatedStudentId}`);
   
   return generatedStudentId;
+};
+
+const logEnrollmentHistory = async (entry) => {
+  try {
+    await StudentEnrollmentHistory.create(entry);
+  } catch (error) {
+    // Non-blocking audit trail: never fail primary student operations.
+    console.error('Failed to write student enrollment history:', error.message);
+  }
 };
 
 // Helper function to generate ID card design (matches provided design)
@@ -412,9 +425,45 @@ const handleMulterError = (err, req, res, next) => {
 router.get('/class/:className', protect, async (req, res) => {
   try {
     const { className } = req.params;
-    const students = await Student.find({ class: className })
-      .select('name rollNumber email class')
-      .sort({ rollNumber: 1 });
+    const { classId } = req.query;
+    let students = [];
+
+    // Preferred: exact class-section membership via Class.students
+    if (classId) {
+      if (!require('mongoose').Types.ObjectId.isValid(classId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid class id'
+        });
+      }
+
+      const classData = await Class.findById(classId)
+        .select('name section')
+        .lean();
+
+      if (!classData) {
+        return res.status(404).json({
+          success: false,
+          message: 'Class not found'
+        });
+      }
+
+      students = await Student.find({
+        $or: [
+          { classRef: classData._id },
+          { class: classData.name, section: classData.section },
+          { class: classData.name, section: { $exists: false } },
+          { class: classData.name, section: '' }
+        ]
+      })
+        .select('name rollNumber email class section')
+        .sort({ rollNumber: 1 });
+    } else {
+      // Backward-compatible fallback (name-only; can mix sections with same class name)
+      students = await Student.find({ class: className })
+        .select('name rollNumber email class')
+        .sort({ rollNumber: 1 });
+    }
 
     res.json({
       success: true,
@@ -440,7 +489,7 @@ router.get('/', protect, async (req, res) => {
     const skip = (page - 1) * limit;
 
     // Sorting parameters
-    const sortBy = req.query.sortBy || 'createdAt';
+    const sortBy = pickSortField(req.query.sortBy, STUDENT_LIST_SORT, 'createdAt');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
 
@@ -449,13 +498,15 @@ router.get('/', protect, async (req, res) => {
 
     // Search filter (name, email, rollNumber, studentId)
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      filter.$or = [
-        { name: searchRegex },
-        { email: searchRegex },
-        { rollNumber: searchRegex },
-        { studentId: searchRegex }
-      ];
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        filter.$or = [
+          { name: searchRegex },
+          { email: searchRegex },
+          { rollNumber: searchRegex },
+          { studentId: searchRegex }
+        ];
+      }
     }
 
     // Class filter
@@ -465,7 +516,8 @@ router.get('/', protect, async (req, res) => {
 
     // Tracking ID filter
     if (req.query.trackingId) {
-      filter.studentId = new RegExp(req.query.trackingId, 'i');
+      const tr = searchRegexFromQuery(req.query.trackingId);
+      if (tr) filter.studentId = tr;
     }
 
     // Status filter
@@ -502,11 +554,23 @@ router.get('/', protect, async (req, res) => {
     const validSkip = (validPage - 1) * limit;
 
     // Fetch students with pagination
-    const students = await Student.find(filter)
+    const studentsRaw = await Student.find(filter)
       .sort(sort)
       .skip(validSkip)
       .limit(limit)
       .lean();
+
+    // Fill parent* from father/mother/guardian when parent fields are empty
+    const students = studentsRaw.map((s) => {
+      const o = { ...s };
+      if (!o.parentName) {
+        o.parentName = o.fatherName || o.motherName || o.guardianName;
+      }
+      if (!o.parentPhone) {
+        o.parentPhone = o.fatherPhone || o.motherPhone || o.guardianPhone;
+      }
+      return o;
+    });
 
     res.json({
       success: true,
@@ -658,7 +722,27 @@ router.post('/', protect, upload.single('photo'), handleMulterError, async (req,
     console.log('========================================');
     
     const student = await Student.create(studentData);
+
+    await logEnrollmentHistory({
+      student: student._id,
+      action: 'create',
+      fromClass: '',
+      toClass: student.class || '',
+      fromAcademicYear: '',
+      toAcademicYear: req.body.academicYear || '',
+      note: 'Student created',
+      changedBy: req.user?._id,
+      changedAt: new Date(),
+    });
     
+    // Auto-create portal login user for this student (email or username = rollNumber/studentId)
+    const portalResult = await createPortalUserForStudent(student);
+    if (portalResult.created) {
+      console.log('Portal user created for student:', student.name, '| Login:', student.email || student.rollNumber || student.studentId);
+    } else {
+      console.log('Portal user for student:', student.name, '—', portalResult.message);
+    }
+
     // Verify the created student has correct roll number
     console.log('Created student rollNumber:', student.rollNumber);
     if (student.rollNumber && !student.rollNumber.startsWith(`${className}-`)) {
@@ -668,7 +752,9 @@ router.post('/', protect, upload.single('photo'), handleMulterError, async (req,
     }
     res.status(201).json({
       success: true,
-      data: student
+      data: student,
+      portalUserCreated: portalResult.created,
+      portalLogin: portalResult.created ? (student.email || student.rollNumber || student.studentId) : undefined
     });
   } catch (error) {
     console.error('Error creating student:', error);
@@ -705,6 +791,32 @@ router.post('/', protect, upload.single('photo'), handleMulterError, async (req,
   }
 });
 
+// Create portal login user for an existing student (e.g. added before auto-create was enabled)
+router.post('/:id/create-portal-user', protect, async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.id).lean();
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    const result = await createPortalUserForStudent(student);
+    if (result.created) {
+      return res.status(201).json({
+        success: true,
+        message: result.message,
+        login: student.email || student.rollNumber || student.studentId,
+        password: 'student123'
+      });
+    }
+    return res.status(200).json({
+      success: false,
+      message: result.message
+    });
+  } catch (err) {
+    console.error('Create portal user error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to create portal user' });
+  }
+});
+
 // Update student
 router.put('/:id', protect, upload.single('photo'), handleMulterError, async (req, res) => {
   try {
@@ -720,6 +832,8 @@ router.put('/:id', protect, upload.single('photo'), handleMulterError, async (re
         message: 'Student not found'
       });
     }
+
+    const oldClass = existingStudent.class || '';
     
     // If roll number is being changed, validate uniqueness within the class
     if (req.body.rollNumber && req.body.rollNumber !== existingStudent.rollNumber) {
@@ -818,6 +932,20 @@ router.put('/:id', protect, upload.single('photo'), handleMulterError, async (re
       return res.status(404).json({
         success: false,
         message: 'Student not found'
+      });
+    }
+
+    if (oldClass !== (student.class || '')) {
+      await logEnrollmentHistory({
+        student: student._id,
+        action: 'class_change',
+        fromClass: oldClass,
+        toClass: student.class || '',
+        fromAcademicYear: req.body.fromAcademicYear || '',
+        toAcademicYear: req.body.academicYear || '',
+        note: 'Student class updated',
+        changedBy: req.user?._id,
+        changedAt: new Date(),
       });
     }
 
@@ -1175,6 +1303,7 @@ router.post('/bulk-update', protect, async (req, res) => {
       const students = await Student.find({ _id: { $in: ids } });
       
       let updatedCount = 0;
+      const historyRows = [];
       for (const student of students) {
         const oldClass = student.class;
         const newClass = className;
@@ -1208,6 +1337,28 @@ router.post('/bulk-update', protect, async (req, res) => {
         // Save the student (this will trigger pre-save hook as well)
         await student.save();
         updatedCount++;
+
+        if (oldClass !== newClass) {
+          historyRows.push({
+            student: student._id,
+            action: 'bulk_assign',
+            fromClass: oldClass || '',
+            toClass: newClass || '',
+            fromAcademicYear: req.body.fromAcademicYear || '',
+            toAcademicYear: req.body.academicYear || '',
+            note: 'Bulk class assignment',
+            changedBy: req.user?._id,
+            changedAt: new Date(),
+          });
+        }
+      }
+
+      if (historyRows.length > 0) {
+        try {
+          await StudentEnrollmentHistory.insertMany(historyRows, { ordered: false });
+        } catch (historyError) {
+          console.error('Bulk update history insert warning:', historyError.message);
+        }
       }
       
       res.json({ 
@@ -1234,6 +1385,177 @@ router.post('/bulk-update', protect, async (req, res) => {
       success: false, 
       message: 'Bulk update failed.', 
       error: error.message 
+    });
+  }
+});
+
+// Promote a class to next class/year without touching historical exam/result records
+// This only updates Student.class (current placement) and writes promotion history entries.
+router.post('/promote-class', protect, async (req, res) => {
+  try {
+    const {
+      fromClass,
+      toClass,
+      toSection = '',
+      fromAcademicYear = '',
+      toAcademicYear = '',
+      studentIds,
+      includeInactive = false,
+      dryRun = false,
+    } = req.body;
+
+    if (!toClass) {
+      return res.status(400).json({
+        success: false,
+        message: 'toClass is required.',
+      });
+    }
+
+    const hasStudentIds = Array.isArray(studentIds) && studentIds.length > 0;
+    if (!hasStudentIds && !fromClass) {
+      return res.status(400).json({
+        success: false,
+        message: 'fromClass is required when studentIds are not provided.',
+      });
+    }
+
+    if (fromClass && String(fromClass).trim() === String(toClass).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'fromClass and toClass must be different.',
+      });
+    }
+
+    const query = {};
+    if (!includeInactive) query.isActive = true;
+    if (fromClass) {
+      query.class = String(fromClass).trim();
+    }
+    if (hasStudentIds) {
+      query._id = { $in: studentIds };
+    }
+
+    const students = await Student.find(query);
+    if (students.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No students found for promotion.',
+      });
+    }
+
+    if (dryRun) {
+      return res.json({
+        success: true,
+        dryRun: true,
+        fromClass: fromClass || '',
+        toClass,
+        toSection,
+        fromAcademicYear,
+        toAcademicYear,
+        candidateCount: students.length,
+        candidates: students.slice(0, 50).map((s) => ({
+          _id: s._id,
+          name: s.name,
+          rollNumber: s.rollNumber,
+          class: s.class,
+          section: s.section || '',
+        })),
+      });
+    }
+
+    const normalizedToClass = String(toClass).trim();
+    const normalizedToSection = String(toSection || '').trim();
+    const targetClassQuery = normalizedToSection
+      ? { name: normalizedToClass, section: normalizedToSection }
+      : { name: normalizedToClass };
+    const targetClassDoc = await Class.findOne(targetClassQuery).select('_id name section').lean();
+
+    let promotedCount = 0;
+    let skippedCount = 0;
+    const historyRows = [];
+    const rollRegeneratedFor = [];
+
+    for (const student of students) {
+      const oldClass = student.class || '';
+      const oldSection = student.section || '';
+      const newClass = normalizedToClass;
+      const newSection = targetClassDoc?.section || normalizedToSection || oldSection;
+
+      if (oldClass === newClass && (!normalizedToSection || oldSection === newSection)) {
+        skippedCount++;
+        continue;
+      }
+
+      student.class = newClass;
+      student.section = newSection || '';
+      if (targetClassDoc?._id) {
+        student.classRef = targetClassDoc._id;
+      }
+
+      // Keep roll number format aligned with current class. Regenerate only when needed.
+      const escapedClassName = newClass.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const classBasedPattern = new RegExp(`^${escapedClassName}-\\d+$`);
+      if (!student.rollNumber || !classBasedPattern.test(student.rollNumber)) {
+        try {
+          const newRollNumber = await generateRollNumber(newClass);
+          student.rollNumber = newRollNumber;
+          rollRegeneratedFor.push({
+            studentId: student._id,
+            name: student.name,
+            newRollNumber,
+          });
+        } catch (error) {
+          console.error(`[PROMOTION] Roll number regeneration failed for ${student.name}:`, error.message);
+        }
+      }
+
+      await student.save();
+      promotedCount++;
+
+      historyRows.push({
+        student: student._id,
+        action: 'promotion',
+        fromClass: oldClass,
+        toClass: `${newClass}${newSection ? `-${newSection}` : ''}`,
+        fromAcademicYear: String(fromAcademicYear || ''),
+        toAcademicYear: String(toAcademicYear || ''),
+        note: `Promoted from ${oldClass || 'N/A'}${oldSection ? `-${oldSection}` : ''} to ${newClass || 'N/A'}${newSection ? `-${newSection}` : ''}`,
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+      });
+    }
+
+    if (historyRows.length > 0) {
+      try {
+        await StudentEnrollmentHistory.insertMany(historyRows, { ordered: false });
+      } catch (historyError) {
+        console.error('Promotion history insert warning:', historyError.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Promotion complete. ${promotedCount} promoted, ${skippedCount} skipped.`,
+      summary: {
+        fromClass,
+        toClass,
+        toSection: normalizedToSection,
+        fromAcademicYear,
+        toAcademicYear,
+        totalMatched: students.length,
+        promotedCount,
+        skippedCount,
+        historyWritten: historyRows.length,
+        rollRegeneratedCount: rollRegeneratedFor.length,
+      },
+      rollRegeneratedFor,
+    });
+  } catch (error) {
+    console.error('Error promoting class:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Class promotion failed.',
+      error: error.message,
     });
   }
 });
@@ -1383,6 +1705,54 @@ router.get('/id-card/:id', protect, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error generating ID card',
+      error: error.message
+    });
+  }
+});
+
+// Get class/enrollment history for one student
+router.get('/:id/enrollment-history', protect, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!require('mongoose').Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid student id' });
+    }
+
+    const history = await StudentEnrollmentHistory.find({ student: id })
+      .sort({ changedAt: -1, createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      count: history.length,
+      data: history,
+    });
+  } catch (error) {
+    console.error('Get enrollment history error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error loading enrollment history',
+      error: error.message,
+    });
+  }
+});
+
+// Get one student (after /export, /id-card, etc. so "export" is not matched as :id)
+router.get('/:id', protect, async (req, res) => {
+  try {
+    if (!require('mongoose').Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid student id' });
+    }
+    const student = await Student.findById(req.params.id).lean();
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    res.json({ success: true, data: student });
+  } catch (error) {
+    console.error('Get student by id error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error loading student',
       error: error.message
     });
   }

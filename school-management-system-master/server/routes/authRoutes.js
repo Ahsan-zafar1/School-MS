@@ -85,6 +85,7 @@ router.get('/verify', protect, async (req, res) => {
         _id: req.user._id.toString(),
         name: req.user.name,
         email: req.user.email,
+        username: req.user.username,
         role: req.user.role
       }
     });

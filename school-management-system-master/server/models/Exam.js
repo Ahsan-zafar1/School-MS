@@ -13,7 +13,7 @@ const examSchema = new mongoose.Schema({
   },
   examType: {
     type: String,
-    enum: ['Midterm', 'Final', 'Quiz', 'Assignment', 'Project', 'Practical', 'Oral', 'Other'],
+    enum: ['1st term', '2nd term', '3rd term', 'Midterm', 'Final', 'Quiz', 'Assignment', 'Project', 'Practical', 'Oral', 'Other'],
     default: 'Midterm'
   },
   subject: {

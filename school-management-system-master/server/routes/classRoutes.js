@@ -3,6 +3,10 @@ const router = express.Router();
 const Class = require('../models/Class');
 const Student = require('../models/Student');
 const Teacher = require('../models/Teacher');
+const Exam = require('../models/Exam');
+const ExamMark = require('../models/ExamMark');
+const Fee = require('../models/Fee');
+const Attendance = require('../models/Attendance');
 const { protect } = require('../middleware/auth');
 const fastcsv = require('fast-csv');
 const csvParser = require('csv-parser');
@@ -10,6 +14,7 @@ const ExcelJS = require('exceljs');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { searchRegexFromQuery, pickSortField, CLASS_LIST_SORT } = require('../utils/queryHelpers');
 
 // Configure multer for Excel/CSV import
 const multerExcel = multer({ 
@@ -34,7 +39,48 @@ if (!fs.existsSync(tmpExcelDir)) {
   fs.mkdirSync(tmpExcelDir, { recursive: true });
 }
 
-// Get all classes with pagination, sorting, and filtering (MUST be before /:id route)
+/**
+ * When Class.name changes, related documents store the class as a plain string.
+ * Update those references so lists, exams, fees, and attendance stay consistent.
+ */
+async function propagateClassNameChange(oldName, newName) {
+  const trimmedOld = (oldName || '').trim();
+  const trimmedNew = (newName || '').trim();
+  if (!trimmedOld || !trimmedNew || trimmedOld === trimmedNew) {
+    return null;
+  }
+
+  const filter = { class: trimmedOld };
+  const update = { $set: { class: trimmedNew } };
+
+  const [students, exams, examMarks, fees, attendance] = await Promise.all([
+    Student.updateMany(filter, update),
+    Exam.updateMany(filter, update),
+    ExamMark.updateMany(filter, update),
+    Fee.updateMany(filter, update),
+    Attendance.updateMany({ ...filter, type: 'student' }, update),
+  ]);
+
+  return {
+    studentsModified: students.modifiedCount,
+    examsModified: exams.modifiedCount,
+    examMarksModified: examMarks.modifiedCount,
+    feesModified: fees.modifiedCount,
+    attendanceModified: attendance.modifiedCount,
+  };
+}
+
+const getStudentScopeForClass = (classDoc) => ({
+  $or: [
+    { classRef: classDoc._id },
+    { class: classDoc.name, section: classDoc.section },
+    // Backward compatibility for older records where section was not stored.
+    { class: classDoc.name, section: { $exists: false } },
+    { class: classDoc.name, section: '' }
+  ]
+});
+
+  // Get all classes with pagination, sorting, and filtering (MUST be before /:id route)
 router.get('/', protect, async (req, res) => {
   try {
     // Pagination parameters
@@ -42,8 +88,8 @@ router.get('/', protect, async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Sorting parameters
-    const sortBy = req.query.sortBy || 'createdAt';
+    // Sorting parameters (allowlist only — bad sortBy can break Mongo)
+    const sortBy = pickSortField(req.query.sortBy, CLASS_LIST_SORT, 'createdAt');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
 
@@ -53,15 +99,17 @@ router.get('/', protect, async (req, res) => {
 
     // Search filter (name, section, classId, roomNumber)
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { name: searchRegex },
-          { section: searchRegex },
-          { classId: searchRegex },
-          { roomNumber: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { name: searchRegex },
+            { section: searchRegex },
+            { classId: searchRegex },
+            { roomNumber: searchRegex }
+          ]
+        });
+      }
     }
 
     // Grade filter - can filter by grade field or by class name
@@ -134,10 +182,14 @@ router.get('/', protect, async (req, res) => {
     // Calculate current students count for each class by querying Student collection
     // This is more reliable than relying on the students array in Class document
     const classesWithCounts = await Promise.all(classes.map(async (cls) => {
-      // Count students where class field matches the class name
-      const studentCount = await Student.countDocuments({ 
-        class: cls.name,
-        isActive: true // Only count active students
+      const studentCount = await Student.countDocuments({
+        isActive: true,
+        $or: [
+          { classRef: cls._id },
+          { class: cls.name, section: cls.section },
+          { class: cls.name, section: { $exists: false } },
+          { class: cls.name, section: '' }
+        ]
       });
       
       return {
@@ -179,15 +231,17 @@ router.get('/export', protect, async (req, res) => {
     
     // Search filter
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { name: searchRegex },
-          { section: searchRegex },
-          { classId: searchRegex },
-          { roomNumber: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { name: searchRegex },
+            { section: searchRegex },
+            { classId: searchRegex },
+            { roomNumber: searchRegex }
+          ]
+        });
+      }
     }
     
     // Grade filter - can filter by grade field or by class name (same logic as GET /)
@@ -361,9 +415,9 @@ router.get('/:id', protect, async (req, res) => {
     }
 
     // Count students by querying Student collection where class field matches class name
-    const studentCount = await Student.countDocuments({ 
-      class: classData.name,
-      isActive: true // Only count active students
+    const studentCount = await Student.countDocuments({
+      isActive: true,
+      ...getStudentScopeForClass(classData)
     });
 
     // Add currentStudents count to the response
@@ -449,6 +503,8 @@ router.put('/:id', protect, async (req, res) => {
       });
     }
 
+    const previousClassName = classData.name;
+
     // Convert isActive from string to boolean if needed
     const updateData = { ...req.body };
     if (updateData.isActive !== undefined && typeof updateData.isActive === 'string') {
@@ -479,9 +535,20 @@ router.put('/:id', protect, async (req, res) => {
     .populate('classTeacher', 'name email phone')
     .populate('subjects.teacher', 'name');
 
+    let classNameCascade = null;
+    if (updatedClass && previousClassName !== updatedClass.name) {
+      try {
+        classNameCascade = await propagateClassNameChange(previousClassName, updatedClass.name);
+      } catch (cascadeErr) {
+        console.error('Class name cascade warning:', cascadeErr.message);
+        classNameCascade = { error: cascadeErr.message };
+      }
+    }
+
     res.json({
       success: true,
-      data: updatedClass
+      data: updatedClass,
+      ...(classNameCascade ? { classNameCascade } : {}),
     });
   } catch (error) {
     console.error('Error updating class:', error);
@@ -514,12 +581,10 @@ router.delete('/:id', protect, async (req, res) => {
     }
 
     // Update students' class field to null
-    if (classData.students && classData.students.length > 0) {
-      await Student.updateMany(
-        { _id: { $in: classData.students } },
-        { $unset: { class: "" } }
-      );
-    }
+    await Student.updateMany(
+      getStudentScopeForClass(classData),
+      { $unset: { class: "", classRef: "", section: "" } }
+    );
 
     // Delete the class
     await Class.findByIdAndDelete(req.params.id);
@@ -559,16 +624,20 @@ router.post('/:id/students', protect, async (req, res) => {
     // Update students' class field
     await Student.updateMany(
       { _id: { $in: studentIds } },
-      { class: classData.name }
+      {
+        class: classData.name,
+        classRef: classData._id,
+        section: classData.section || ''
+      }
     );
 
-    // Remove class from students that were unassigned
+    // Remove class from students that were unassigned (section-aware)
     await Student.updateMany(
-      { 
+      {
         _id: { $nin: studentIds },
-        class: classData.name
+        ...getStudentScopeForClass(classData)
       },
-      { $unset: { class: "" } }
+      { $unset: { class: "", classRef: "", section: "" } }
     );
 
     const updatedClass = await Class.findById(req.params.id)
@@ -610,7 +679,7 @@ router.delete('/:id/students', protect, async (req, res) => {
     // Update students' class field
     await Student.updateMany(
       { _id: { $in: studentIds } },
-      { $unset: { class: "" } }
+      { $unset: { class: "", classRef: "", section: "" } }
     );
 
     const updatedClass = await Class.findById(req.params.id)

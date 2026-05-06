@@ -7,6 +7,7 @@ const ExcelJS = require('exceljs');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { searchRegexFromQuery, pickSortField, EXAM_LIST_SORT } = require('../utils/queryHelpers');
 const fastcsv = require('fast-csv');
 const csvParser = require('csv-parser');
 
@@ -42,7 +43,7 @@ router.get('/', protect, async (req, res) => {
     const skip = (page - 1) * limit;
 
     // Sorting parameters
-    const sortBy = req.query.sortBy || 'date';
+    const sortBy = pickSortField(req.query.sortBy, EXAM_LIST_SORT, 'date');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
 
@@ -52,16 +53,18 @@ router.get('/', protect, async (req, res) => {
 
     // Search filter (examName, subject, class, examId)
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { examName: searchRegex },
-          { subject: searchRegex },
-          { class: searchRegex },
-          { examId: searchRegex },
-          { roomNumber: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { examName: searchRegex },
+            { subject: searchRegex },
+            { class: searchRegex },
+            { examId: searchRegex },
+            { roomNumber: searchRegex }
+          ]
+        });
+      }
     }
 
     // Class filter
@@ -173,15 +176,17 @@ router.get('/export', protect, async (req, res) => {
     
     // Search filter
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      andConditions.push({
-        $or: [
-          { examName: searchRegex },
-          { subject: searchRegex },
-          { class: searchRegex },
-          { examId: searchRegex }
-        ]
-      });
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        andConditions.push({
+          $or: [
+            { examName: searchRegex },
+            { subject: searchRegex },
+            { class: searchRegex },
+            { examId: searchRegex }
+          ]
+        });
+      }
     }
     
     if (req.query.class) filter.class = req.query.class;
@@ -380,9 +385,23 @@ router.post('/', protect, async (req, res) => {
       createdBy: req.user._id
     };
 
-    // Convert isActive from string to boolean if needed
     if (examData.isActive !== undefined && typeof examData.isActive === 'string') {
       examData.isActive = examData.isActive === 'true' || examData.isActive === 'True';
+    }
+    if (examData.date !== undefined && examData.date !== '') {
+      examData.date = examData.date instanceof Date ? examData.date : new Date(examData.date);
+    }
+    if (examData.duration !== undefined && examData.duration !== '') {
+      const n = Number(examData.duration);
+      examData.duration = Number.isFinite(n) ? n : 60;
+    }
+    if (examData.totalMarks !== undefined && examData.totalMarks !== '') {
+      const n = Number(examData.totalMarks);
+      examData.totalMarks = Number.isFinite(n) ? n : 100;
+    }
+    if (examData.passingMarks !== undefined && examData.passingMarks !== '') {
+      const n = Number(examData.passingMarks);
+      examData.passingMarks = Number.isFinite(n) ? n : 50;
     }
 
     const exam = await Exam.create(examData);
@@ -396,19 +415,21 @@ router.post('/', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating exam:', error);
+    const message = error.name === 'ValidationError' && error.errors
+      ? Object.values(error.errors).map(e => e.message).filter(Boolean).join(', ') || error.message
+      : (error.message || 'Error creating exam');
     res.status(400).json({
       success: false,
-      message: 'Error creating exam',
+      message,
       error: error.message
     });
   }
 });
 
-// Update exam
+// Update exam (only allowed fields; never overwrite _id, examId, createdBy)
 router.put('/:id', protect, async (req, res) => {
   try {
     const exam = await Exam.findById(req.params.id);
-
     if (!exam) {
       return res.status(404).json({
         success: false,
@@ -416,14 +437,29 @@ router.put('/:id', protect, async (req, res) => {
       });
     }
 
-    // Convert isActive from string to boolean if needed
-    if (req.body.isActive !== undefined && typeof req.body.isActive === 'string') {
-      req.body.isActive = req.body.isActive === 'true' || req.body.isActive === 'True';
+    const allowed = [
+      'examName', 'examType', 'subject', 'class', 'academicYear', 'date',
+      'startTime', 'endTime', 'duration', 'totalMarks', 'passingMarks',
+      'roomNumber', 'instructions', 'description', 'isActive', 'status'
+    ];
+    const update = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) update[key] = req.body[key];
     }
+
+    if (update.isActive !== undefined && typeof update.isActive === 'string') {
+      update.isActive = update.isActive === 'true' || update.isActive === 'True';
+    }
+    if (update.date !== undefined && typeof update.date === 'string') {
+      update.date = new Date(update.date);
+    }
+    if (update.duration !== undefined) update.duration = Number(update.duration);
+    if (update.totalMarks !== undefined) update.totalMarks = Number(update.totalMarks);
+    if (update.passingMarks !== undefined) update.passingMarks = Number(update.passingMarks);
 
     const updatedExam = await Exam.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      { $set: update },
       { new: true, runValidators: true }
     ).populate('createdBy', 'name email').lean();
 
@@ -433,9 +469,12 @@ router.put('/:id', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating exam:', error);
+    const message = error.name === 'ValidationError' && error.errors
+      ? Object.values(error.errors).map(e => e.message).filter(Boolean).join(', ') || error.message
+      : (error.message || 'Error updating exam');
     res.status(400).json({
       success: false,
-      message: 'Error updating exam',
+      message,
       error: error.message
     });
   }

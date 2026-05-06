@@ -23,6 +23,16 @@ const studentSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Please add a class']
   },
+  classRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
+    index: true
+  },
+  section: {
+    type: String,
+    trim: true,
+    index: true
+  },
   address: {
     type: String,
     required: [true, 'Please add an address']

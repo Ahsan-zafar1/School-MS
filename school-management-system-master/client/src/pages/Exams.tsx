@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useForm, Controller } from 'react-hook-form';
 import { 
   Plus, 
   Search, 
@@ -25,10 +25,13 @@ import {
   FileText,
   Users
 } from 'lucide-react';
+import axios from 'axios';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { useClasses } from '../hooks/useClasses';
+import { useSubjects } from '../hooks/useSubjects';
 import { useSettings } from '../contexts/SettingsContext';
+import IconActionButton from '../components/IconActionButton';
 
 interface Exam {
   _id: string;
@@ -214,8 +217,10 @@ const ExamCalendarView: React.FC<{
               Exams on {selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </h3>
             <button
+              type="button"
+              title="Clear selected date"
               onClick={() => setSelectedDate(null)}
-              className="text-gray-500 hover:text-gray-700"
+              className="text-gray-500 hover:text-gray-700 text-xl leading-none px-2"
             >
               ×
             </button>
@@ -307,6 +312,9 @@ interface ExamForm {
   isActive: string;
 }
 
+/** Select marker for free-text academic year in Add/Edit Exam modal */
+const EXAM_ACADEMIC_YEAR_CUSTOM = '__custom__';
+
 const Exams: React.FC = () => {
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
@@ -314,21 +322,31 @@ const Exams: React.FC = () => {
   const [editingExam, setEditingExam] = useState<Exam | null>(null);
   const [previewExam, setPreviewExam] = useState<Exam | null>(null);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [examAcademicYearCustomMode, setExamAcademicYearCustomMode] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterClass, setFilterClass] = useState('');
   const [filterSubject, setFilterSubject] = useState('');
   const [filterExamType, setFilterExamType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterAcademicYear, setFilterAcademicYear] = useState('');
+  const [academicYearFilterInitialized, setAcademicYearFilterInitialized] = useState(false);
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [filterActive, setFilterActive] = useState('');
   const [selectedExams, setSelectedExams] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'table' | 'calendar'>('table');
-  
+  const [showDateSheetClassModal, setShowDateSheetClassModal] = useState(false);
+  const [dateSheetClass, setDateSheetClass] = useState<string>('');
+  const [dateSheetAcademicYear, setDateSheetAcademicYear] = useState<string>('');
+  const [dateSheetExamTerm, setDateSheetExamTerm] = useState<string>('');
+  const [dateSheetCountByClass, setDateSheetCountByClass] = useState<Record<string, number> | null>(null);
+  const [dateSheetCountLoading, setDateSheetCountLoading] = useState(false);
+
+  const EXAM_TERM_OPTIONS = ['1st term', '2nd term', '3rd term', 'Midterm', 'Final', 'Quiz', 'Assignment', 'Project', 'Practical', 'Oral', 'Other'];
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const { getItemsPerPage, getDefaultAcademicYear } = useSettings();
+  const { getItemsPerPage, getDefaultAcademicYear, loading: settingsLoading } = useSettings();
   const [itemsPerPage, setItemsPerPage] = useState(getItemsPerPage());
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
@@ -338,9 +356,11 @@ const Exams: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const { classNames } = useClasses({ activeOnly: false });
+  const { subjectNames: catalogSubjectNames } = useSubjects();
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     formState: { errors },
@@ -351,16 +371,44 @@ const Exams: React.FC = () => {
     setCurrentPage(1);
   }, [searchTerm, filterClass, filterSubject, filterExamType, filterStatus, filterAcademicYear, filterDateFrom, filterDateTo, filterActive]);
 
-  useEffect(() => {
-    fetchExams();
-  }, [currentPage, itemsPerPage, sortBy, sortOrder, searchTerm, filterClass, filterSubject, filterExamType, filterStatus, filterAcademicYear, filterDateFrom, filterDateTo, filterActive]);
-
   // Fetch all exams for filters (to get unique subjects and academic years)
   const [allExamsForFilters, setAllExamsForFilters] = useState<Exam[]>([]);
+  const [filterSourceLoaded, setFilterSourceLoaded] = useState(false);
 
   useEffect(() => {
     fetchAllExamsForFilters();
   }, []);
+
+  // Fetch exam count by class when date sheet modal filters change (term, year, class)
+  useEffect(() => {
+    if (!showDateSheetClassModal) {
+      setDateSheetCountByClass(null);
+      return;
+    }
+    const fetchDateSheetCount = async () => {
+      setDateSheetCountLoading(true);
+      setDateSheetCountByClass(null);
+      try {
+        const params = new URLSearchParams({ limit: '2000' });
+        if (dateSheetClass) params.append('class', dateSheetClass);
+        if (dateSheetAcademicYear) params.append('academicYear', dateSheetAcademicYear);
+        if (dateSheetExamTerm) params.append('examType', dateSheetExamTerm);
+        const response = await api.get(`/api/exams?${params.toString()}`);
+        const exams: Exam[] = response.data.data || [];
+        const byClass: Record<string, number> = {};
+        exams.forEach((exam) => {
+          const c = exam.class || 'Other';
+          byClass[c] = (byClass[c] || 0) + 1;
+        });
+        setDateSheetCountByClass(byClass);
+      } catch (error) {
+        setDateSheetCountByClass({});
+      } finally {
+        setDateSheetCountLoading(false);
+      }
+    };
+    fetchDateSheetCount();
+  }, [showDateSheetClassModal, dateSheetClass, dateSheetAcademicYear, dateSheetExamTerm]);
 
   const fetchAllExamsForFilters = async () => {
     try {
@@ -368,18 +416,28 @@ const Exams: React.FC = () => {
       setAllExamsForFilters(response.data.data || []);
     } catch (error) {
       console.error('Error fetching exams for filters:', error);
+    } finally {
+      setFilterSourceLoaded(true);
     }
   };
 
-  // Get unique subjects
+  // Catalog + any subject text already on exams (legacy / custom)
   const getUniqueSubjects = (): string[] => {
-    const subjects = new Set<string>();
-    allExamsForFilters.forEach(exam => {
+    const subjects = new Set<string>(catalogSubjectNames);
+    allExamsForFilters.forEach((exam) => {
       if (exam.subject && exam.subject.trim()) {
         subjects.add(exam.subject.trim());
       }
     });
     return Array.from(subjects).sort();
+  };
+
+  const getFormSubjectOptions = (): string[] => {
+    const base = getUniqueSubjects();
+    if (editingExam?.subject?.trim() && !base.includes(editingExam.subject.trim())) {
+      return [...base, editingExam.subject.trim()].sort();
+    }
+    return base;
   };
 
   // Get unique academic years
@@ -393,7 +451,88 @@ const Exams: React.FC = () => {
     return Array.from(years).sort().reverse();
   };
 
-  const fetchExams = async () => {
+  const academicYearOptions = useMemo(() => getUniqueAcademicYears(), [allExamsForFilters]);
+
+  const formAcademicYearOptions = useMemo(() => {
+    const years = new Set<string>(academicYearOptions);
+    const configured = (getDefaultAcademicYear() || '').trim();
+    if (configured) years.add(configured);
+    const editYear = editingExam?.academicYear?.trim();
+    if (editYear) years.add(editYear);
+    return Array.from(years).sort().reverse();
+  }, [academicYearOptions, getDefaultAcademicYear, editingExam?.academicYear]);
+
+  useEffect(() => {
+    if (!filterSourceLoaded || settingsLoading) return;
+    if (academicYearFilterInitialized) return;
+    if (filterAcademicYear) {
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const configuredDefaultYear = getDefaultAcademicYear();
+
+    if (academicYearOptions.length === 0) {
+      setFilterAcademicYear(configuredDefaultYear || '');
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const exact = academicYearOptions.find((y) => y === configuredDefaultYear);
+    if (exact) {
+      setFilterAcademicYear(exact);
+      setAcademicYearFilterInitialized(true);
+      return;
+    }
+
+    const startYear = configuredDefaultYear?.match(/^(\d{4})/)?.[1];
+    if (startYear) {
+      const sameStartYear = academicYearOptions.find(
+        (y) => y === startYear || y.startsWith(`${startYear}-`)
+      );
+      if (sameStartYear) {
+        setFilterAcademicYear(sameStartYear);
+        setAcademicYearFilterInitialized(true);
+        return;
+      }
+    }
+
+    setFilterAcademicYear(academicYearOptions[0]);
+    setAcademicYearFilterInitialized(true);
+  }, [
+    filterSourceLoaded,
+    settingsLoading,
+    academicYearFilterInitialized,
+    filterAcademicYear,
+    academicYearOptions,
+    getDefaultAcademicYear,
+  ]);
+
+  useEffect(() => {
+    if (!filterSourceLoaded || settingsLoading || !academicYearFilterInitialized) return;
+    const controller = new AbortController();
+    fetchExams(controller.signal);
+    return () => controller.abort();
+  }, [
+    filterSourceLoaded,
+    settingsLoading,
+    academicYearFilterInitialized,
+    currentPage,
+    itemsPerPage,
+    sortBy,
+    sortOrder,
+    searchTerm,
+    filterClass,
+    filterSubject,
+    filterExamType,
+    filterStatus,
+    filterAcademicYear,
+    filterDateFrom,
+    filterDateTo,
+    filterActive,
+  ]);
+
+  const fetchExams = async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
@@ -413,7 +552,7 @@ const Exams: React.FC = () => {
       if (filterDateTo) params.append('dateTo', filterDateTo);
       if (filterActive) params.append('isActive', filterActive);
 
-      const response = await api.get(`/api/exams?${params.toString()}`);
+      const response = await api.get(`/api/exams?${params.toString()}`, { signal });
       setExams(response.data.data || []);
       
       if (response.data.pagination) {
@@ -423,8 +562,9 @@ const Exams: React.FC = () => {
         setTotalPages(1);
         setTotalItems(response.data.data?.length || 0);
       }
-    } catch (error) {
-      console.error('Error fetching exams:', error);
+    } catch (error: unknown) {
+      if (axios.isCancel(error)) return;
+      console.error('Error fetching exams  :', error);
       toast.error('Failed to fetch exams');
       setExams([]);
       setTotalPages(1);
@@ -438,6 +578,7 @@ const Exams: React.FC = () => {
     try {
       const examData = {
         ...data,
+        academicYear: String(data.academicYear || '').trim(),
         isActive: data.isActive === 'true',
         duration: parseInt(data.duration.toString()),
         totalMarks: parseInt(data.totalMarks.toString()),
@@ -475,6 +616,7 @@ const Exams: React.FC = () => {
   };
 
   const handleEdit = (exam: Exam) => {
+    setExamAcademicYearCustomMode(false);
     setEditingExam(exam);
     const examDate = exam.date ? new Date(exam.date).toISOString().split('T')[0] : '';
     reset({
@@ -891,9 +1033,157 @@ const Exams: React.FC = () => {
     }
   };
 
+  const handlePrintDateSheetClassWise = async () => {
+    try {
+      const params = new URLSearchParams({
+        limit: '2000',
+        sortBy: 'date',
+        sortOrder: 'asc',
+      });
+      if (dateSheetClass) params.append('class', dateSheetClass);
+      if (dateSheetAcademicYear) params.append('academicYear', dateSheetAcademicYear);
+      if (dateSheetExamTerm) params.append('examType', dateSheetExamTerm);
+
+      const response = await api.get(`/api/exams?${params.toString()}`);
+      const allExams: Exam[] = response.data.data || [];
+      if (allExams.length === 0) {
+        toast.error('No exams found for the selected filters');
+        return;
+      }
+
+      const byClass: Record<string, Exam[]> = {};
+      allExams.forEach((exam) => {
+        const c = exam.class || 'Other';
+        if (!byClass[c]) byClass[c] = [];
+        byClass[c].push(exam);
+      });
+      Object.keys(byClass).forEach((c) => {
+        byClass[c].sort((a, b) => {
+          const tA = new Date(a.date).getTime();
+          const tB = new Date(b.date).getTime();
+          if (tA !== tB) return tA - tB;
+          return (a.startTime || '').localeCompare(b.startTime || '');
+        });
+      });
+
+      const classOrder = dateSheetClass ? [dateSheetClass] : Object.keys(byClass).sort();
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        toast.error('Please allow pop-ups to print');
+        return;
+      }
+
+      const classTablesHtml = classOrder
+        .filter((c) => byClass[c]?.length)
+        .map(
+          (className) => `
+          <div class="class-section page-break-inside-avoid">
+            <div class="class-header">Class: ${className}</div>
+            <table class="exam-table">
+              <thead>
+                <tr>
+                  <th style="width: 5%;">S.No</th>
+                  <th style="width: 18%;">Subject</th>
+                  <th style="width: 12%;">Exam Type</th>
+                  <th style="width: 12%;">Date</th>
+                  <th style="width: 10%;">Start Time</th>
+                  <th style="width: 10%;">End Time</th>
+                  <th style="width: 8%;">Duration</th>
+                  <th style="width: 8%;">Total Marks</th>
+                  <th style="width: 8%;">Pass Marks</th>
+                  <th style="width: 9%;">Room</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(byClass[className] || []).map((exam, idx) => {
+                  const d = new Date(exam.date);
+                  const dateStr = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+                  return `
+                    <tr>
+                      <td>${idx + 1}</td>
+                      <td style="font-weight: 600;">${exam.subject || '-'}</td>
+                      <td>${exam.examType || '-'}</td>
+                      <td>${dateStr}</td>
+                      <td>${exam.startTime || '-'}</td>
+                      <td>${exam.endTime || '-'}</td>
+                      <td>${exam.duration ?? '-'} min</td>
+                      <td>${exam.totalMarks ?? '-'}</td>
+                      <td>${exam.passingMarks ?? '-'}</td>
+                      <td>${exam.roomNumber || '-'}</td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `
+        )
+        .join('');
+
+      const printContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Exam Date Sheet - Class Wise</title>
+            <style>
+              @media print {
+                body { margin: 0; padding: 15px; }
+                .no-print { display: none; }
+                .page-break-inside-avoid { page-break-inside: avoid; }
+              }
+              body { font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.5; }
+              .header { text-align: center; border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 25px; }
+              .header h1 { color: #2563eb; margin: 0; font-size: 26px; font-weight: bold; }
+              .header h2 { color: #64748b; margin: 8px 0 0 0; font-size: 16px; font-weight: normal; }
+              .class-section { margin-bottom: 32px; }
+              .class-header {
+                background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+                color: white;
+                padding: 10px 16px;
+                border-radius: 8px 8px 0 0;
+                font-size: 16px; font-weight: bold;
+              }
+              .exam-table { width: 100%; border-collapse: collapse; margin-bottom: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.08); background: white; }
+              .exam-table thead { background: #f1f5f9; }
+              .exam-table th { padding: 10px 12px; text-align: left; font-weight: 600; color: #1e293b; border-bottom: 2px solid #e2e8f0; font-size: 13px; }
+              .exam-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 13px; }
+              .exam-table tbody tr:last-child td { border-bottom: none; }
+              .footer { margin-top: 30px; padding-top: 16px; border-top: 2px solid #e2e8f0; text-align: center; color: #64748b; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1>EXAM DATE SHEET (CLASS-WISE)</h1>
+              <h2>${dateSheetAcademicYear || 'All Academic Years'}${dateSheetClass ? ' — Class ' + dateSheetClass : ' — All Classes'}${dateSheetExamTerm ? ' — ' + dateSheetExamTerm : ''}</h2>
+            </div>
+            ${classTablesHtml}
+            <div class="footer">
+              <p><strong>Generated on:</strong> ${new Date().toLocaleString()}</p>
+              <p style="margin-top: 4px;">Computer-generated document. Verify details before use.</p>
+            </div>
+            <script>window.onload = function() { window.print(); };</script>
+          </body>
+        </html>
+      `;
+
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+      setShowDateSheetClassModal(false);
+      setDateSheetClass('');
+      setDateSheetAcademicYear('');
+      setDateSheetExamTerm('');
+      setDateSheetCountByClass(null);
+      toast.success('Date sheet (class-wise) generated. Print dialog opened.');
+    } catch (error: any) {
+      console.error('Error printing class-wise date sheet:', error);
+      toast.error(error.response?.data?.message || 'Failed to generate date sheet');
+    }
+  };
+
   const handleCloseModal = () => {
     setShowModal(false);
     setEditingExam(null);
+    setExamAcademicYearCustomMode(false);
     reset({
       examName: '',
       examType: 'Midterm',
@@ -1130,7 +1420,30 @@ const Exams: React.FC = () => {
           <p className="text-gray-600 mt-1">Manage examinations and schedules</p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
+          type="button"
+          onClick={() => {
+            setEditingExam(null);
+            setExamAcademicYearCustomMode(false);
+            reset({
+              examName: '',
+              examType: 'Midterm',
+              subject: '',
+              class: '',
+              academicYear: '',
+              date: '',
+              startTime: '',
+              endTime: '',
+              duration: 60,
+              totalMarks: 100,
+              passingMarks: 50,
+              roomNumber: '',
+              instructions: '',
+              description: '',
+              status: 'Scheduled',
+              isActive: 'true',
+            });
+            setShowModal(true);
+          }}
           className="btn-primary flex items-center gap-2"
         >
           <Plus className="h-5 w-5" />
@@ -1181,65 +1494,28 @@ const Exams: React.FC = () => {
             className="input-field"
           >
             <option value="">All Types</option>
-            <option value="Midterm">Midterm</option>
-            <option value="Final">Final</option>
-            <option value="Quiz">Quiz</option>
-            <option value="Assignment">Assignment</option>
-            <option value="Project">Project</option>
-            <option value="Practical">Practical</option>
-            <option value="Oral">Oral</option>
-            <option value="Other">Other</option>
+            {EXAM_TERM_OPTIONS.map((term) => (
+              <option key={term} value={term}>{term}</option>
+            ))}
           </select>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="input-field"
-          >
-            <option value="">All Status</option>
-            <option value="Scheduled">Scheduled</option>
-            <option value="Ongoing">Ongoing</option>
-            <option value="Completed">Completed</option>
-            <option value="Cancelled">Cancelled</option>
-            <option value="Postponed">Postponed</option>
-          </select>
+         
           <select
             value={filterAcademicYear}
             onChange={(e) => setFilterAcademicYear(e.target.value)}
             className="input-field"
           >
             <option value="">All Academic Years</option>
-            {getUniqueAcademicYears().map((year) => (
+            {academicYearOptions.map((year) => (
               <option key={year} value={year}>
                 {year}
               </option>
             ))}
           </select>
-          <input
-            type="date"
-            value={filterDateFrom}
-            onChange={(e) => setFilterDateFrom(e.target.value)}
-            placeholder="Date From"
-            className="input-field"
-          />
-          <input
-            type="date"
-            value={filterDateTo}
-            onChange={(e) => setFilterDateTo(e.target.value)}
-            placeholder="Date To"
-            className="input-field"
-          />
-          <select
-            value={filterActive}
-            onChange={(e) => setFilterActive(e.target.value)}
-            className="input-field"
-          >
-            <option value="">All Status</option>
-            <option value="true">Active</option>
-            <option value="false">Inactive</option>
-          </select>
+         
+          
         </div>
 
         {/* Data Management Buttons */}
@@ -1251,6 +1527,13 @@ const Exams: React.FC = () => {
             >
               <Printer className="h-4 w-4" />
               Print All Date Sheets
+            </button>
+            <button
+              onClick={() => setShowDateSheetClassModal(true)}
+              className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-blue-600 text-white rounded-lg hover:from-indigo-600 hover:to-blue-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center gap-2 font-medium"
+            >
+              <FileText className="h-4 w-4" />
+              Date Sheet (Class-wise)
             </button>
             <button
               onClick={() => handleExport('excel')}
@@ -1471,34 +1754,34 @@ const Exams: React.FC = () => {
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-medium">
                       <div className="flex items-center justify-end gap-2">
-                        <button
+                        <IconActionButton
                           onClick={() => handlePrintDateSheet(exam)}
-                          className="text-green-600 hover:text-green-900 p-1"
-                          title="Print Date Sheet"
+                          tooltip="Print Date Sheet"
+                          className="text-green-600 hover:text-green-900 focus:ring-green-300"
                         >
                           <FileText className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handlePreview(exam)}
-                          className="text-blue-600 hover:text-blue-900 p-1"
-                          title="Preview"
+                          tooltip="Preview Exam"
+                          className="text-blue-600 hover:text-blue-900 focus:ring-blue-300"
                         >
                           <Eye className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handleEdit(exam)}
-                          className="text-indigo-600 hover:text-indigo-900 p-1"
-                          title="Edit"
+                          tooltip="Edit Exam"
+                          className="text-indigo-600 hover:text-indigo-900 focus:ring-indigo-300"
                         >
                           <Edit className="h-4 w-4" />
-                        </button>
-                        <button
+                        </IconActionButton>
+                        <IconActionButton
                           onClick={() => handleDelete(exam._id)}
-                          className="text-red-600 hover:text-red-900 p-1"
-                          title="Delete"
+                          tooltip="Delete Exam"
+                          className="text-red-600 hover:text-red-900 focus:ring-red-300"
                         >
                           <Trash2 className="h-4 w-4" />
-                        </button>
+                        </IconActionButton>
                       </div>
                     </td>
                   </tr>
@@ -1531,6 +1814,9 @@ const Exams: React.FC = () => {
                 </span>
                 <div className="flex items-center">
                   <button
+                    type="button"
+                    title="First page"
+                    aria-label="First page"
                     onClick={() => handlePageChange(1)}
                     disabled={currentPage === 1}
                     className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1538,6 +1824,9 @@ const Exams: React.FC = () => {
                     <ChevronsLeft className="h-4 w-4" />
                   </button>
                   <button
+                    type="button"
+                    title="Previous page"
+                    aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1559,6 +1848,8 @@ const Exams: React.FC = () => {
                       return (
                         <button
                           key={pageNum}
+                          type="button"
+                          title={`Go to page ${pageNum}`}
                           onClick={() => handlePageChange(pageNum)}
                           className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
                             currentPage === pageNum
@@ -1572,6 +1863,9 @@ const Exams: React.FC = () => {
                     })}
                   </div>
                   <button
+                    type="button"
+                    title="Next page"
+                    aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1579,6 +1873,9 @@ const Exams: React.FC = () => {
                     <ChevronRight className="h-4 w-4" />
                   </button>
                   <button
+                    type="button"
+                    title="Last page"
+                    aria-label="Last page"
                     onClick={() => handlePageChange(totalPages)}
                     disabled={currentPage === totalPages}
                     className="p-2 rounded-md border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
@@ -1601,12 +1898,14 @@ const Exams: React.FC = () => {
               <h2 className="text-2xl font-bold text-gray-900">
                 {editingExam ? 'Edit Exam' : 'Add New Exam'}
               </h2>
-              <button
+              <IconActionButton
                 onClick={handleCloseModal}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
+                tooltip="Close dialog"
+                className="text-gray-500 hover:text-gray-700 focus:ring-gray-400"
+                sizeClass="p-1 rounded-md text-2xl leading-none"
               >
                 ×
-              </button>
+              </IconActionButton>
             </div>
             <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1645,14 +1944,20 @@ const Exams: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Subject *
                   </label>
-                  <input
+                  <select
                     {...register('subject', { required: 'Subject is required' })}
                     className="input-field"
-                    placeholder="e.g., Mathematics"
-                  />
+                  >
+                    <option value="">Select subject</option>
+                    {getFormSubjectOptions().map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
                   {errors.subject && (
                     <p className="text-red-500 text-xs mt-1">{errors.subject.message}</p>
                   )}
@@ -1680,10 +1985,73 @@ const Exams: React.FC = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Academic Year *
                   </label>
-                  <input
-                    {...register('academicYear', { required: 'Academic year is required' })}
-                    className="input-field"
-                    placeholder="e.g., 2024-2025"
+                  <Controller
+                    name="academicYear"
+                    control={control}
+                    rules={{
+                      required: 'Academic year is required',
+                      validate: (v) =>
+                        v != null && String(v).trim().length > 0 ? true : 'Academic year is required',
+                    }}
+                    render={({ field }) => (
+                      <div className="space-y-2">
+                        {!examAcademicYearCustomMode ? (
+                          <select
+                            className="input-field"
+                            value={
+                              field.value &&
+                              formAcademicYearOptions.includes(field.value)
+                                ? field.value
+                                : ''
+                            }
+                            onBlur={field.onBlur}
+                            ref={field.ref}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === EXAM_ACADEMIC_YEAR_CUSTOM) {
+                                setExamAcademicYearCustomMode(true);
+                                field.onChange('');
+                              } else {
+                                field.onChange(v);
+                              }
+                            }}
+                          >
+                            <option value="">Select academic year</option>
+                            {formAcademicYearOptions.map((year) => (
+                              <option key={year} value={year}>
+                                {year}
+                              </option>
+                            ))}
+                            <option value={EXAM_ACADEMIC_YEAR_CUSTOM}>
+                              Other (custom year)…
+                            </option>
+                          </select>
+                        ) : (
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <input
+                              type="text"
+                              className="input-field flex-1"
+                              placeholder="e.g. 2030-2031"
+                              value={field.value}
+                              onBlur={field.onBlur}
+                              name={field.name}
+                              ref={field.ref}
+                              onChange={(e) => field.onChange(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-primary-600 hover:text-primary-800 whitespace-nowrap"
+                              onClick={() => {
+                                setExamAcademicYearCustomMode(false);
+                                field.onChange('');
+                              }}
+                            >
+                              Choose from list
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   />
                   {errors.academicYear && (
                     <p className="text-red-500 text-xs mt-1">{errors.academicYear.message}</p>
@@ -1832,14 +2200,111 @@ const Exams: React.FC = () => {
                   type="button"
                   onClick={handleCloseModal}
                   className="btn-secondary"
+                  title="Discard changes and close"
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
+                <button type="submit" className="btn-primary" title={editingExam ? 'Save exam changes' : 'Create exam'}>
                   {editingExam ? 'Update Exam' : 'Add Exam'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Date Sheet (Class-wise) Modal */}
+      {showDateSheetClassModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Print Date Sheet (Class-wise)</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Generate one table per class. Use filters to narrow by exam term and year.
+            </p>
+            <div className="space-y-4">
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
+                <select
+                  value={dateSheetClass}
+                  onChange={(e) => setDateSheetClass(e.target.value)}
+                  className="input-field w-full"
+                >
+                  <option value="">All classes</option>
+                  {classNames.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Exam term</label>
+                <select
+                  value={dateSheetExamTerm}
+                  onChange={(e) => setDateSheetExamTerm(e.target.value)}
+                  className="input-field w-full"
+                >
+                  <option value="">All terms</option>
+                  {EXAM_TERM_OPTIONS.map((term) => (
+                    <option key={term} value={term}>{term}</option>
+                  ))}
+                </select>
+                {dateSheetCountLoading && (
+                  <p className="mt-1 text-xs text-gray-500">Counting exams…</p>
+                )}
+                {!dateSheetCountLoading && dateSheetCountByClass !== null && (
+                  <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200 text-sm text-gray-700">
+                    {Object.keys(dateSheetCountByClass).length === 0 ? (
+                      <span>No exams found for the selected filters.</span>
+                    ) : (
+                      <span>
+                        <strong>Class-wise:</strong>{' '}
+                        {Object.entries(dateSheetCountByClass)
+                          .sort(([a], [b]) => a.localeCompare(b))
+                          .map(([cls, count]) => `${cls}: ${count} exam${count !== 1 ? 's' : ''}`)
+                          .join(' · ')}
+                        {' '}(Total: {Object.values(dateSheetCountByClass).reduce((a, b) => a + b, 0)})
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Academic year (optional)</label>
+                <input
+                  type="text"
+                  value={dateSheetAcademicYear}
+                  onChange={(e) => setDateSheetAcademicYear(e.target.value)}
+                  placeholder="e.g. 2024-2025"
+                  className="input-field w-full"
+                />
+              </div>
+             
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                type="button"
+                title="Close without printing"
+                onClick={() => {
+                  setShowDateSheetClassModal(false);
+                  setDateSheetClass('');
+                  setDateSheetAcademicYear('');
+                  setDateSheetExamTerm('');
+                  setDateSheetCountByClass(null);
+                }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                title="Generate class-wise date sheet and print"
+                onClick={handlePrintDateSheetClassWise}
+                disabled={dateSheetCountByClass !== null && Object.keys(dateSheetCountByClass).length === 0}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                <Printer className="h-4 w-4" />
+                Generate & Print
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1850,27 +2315,31 @@ const Exams: React.FC = () => {
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200 flex justify-between items-center">
               <h2 className="text-2xl font-bold text-gray-900">Exam Profile</h2>
-              <div className="flex gap-2">
-                <button
+              <div className="flex gap-2 items-center">
+                <IconActionButton
                   onClick={() => previewExam && handlePrintDateSheet(previewExam)}
-                  className="p-2 text-green-600 hover:text-green-900 hover:bg-green-50 rounded"
-                  title="Print Date Sheet"
+                  tooltip="Print Date Sheet"
+                  className="text-green-600 hover:text-green-900 hover:bg-green-50 focus:ring-green-300"
+                  sizeClass="p-2 rounded"
                 >
                   <FileText className="h-5 w-5" />
-                </button>
-                <button
+                </IconActionButton>
+                <IconActionButton
                   onClick={handlePrintProfile}
-                  className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
-                  title="Print Profile"
+                  tooltip="Print Profile"
+                  className="text-gray-600 hover:text-gray-900 hover:bg-gray-100 focus:ring-gray-400"
+                  sizeClass="p-2 rounded"
                 >
                   <Printer className="h-5 w-5" />
-                </button>
-                <button
+                </IconActionButton>
+                <IconActionButton
                   onClick={() => setShowPreviewModal(false)}
-                  className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+                  tooltip="Close preview"
+                  className="text-gray-600 hover:text-gray-900 hover:bg-gray-100 focus:ring-gray-400"
+                  sizeClass="p-2 rounded text-xl leading-none"
                 >
                   ×
-                </button>
+                </IconActionButton>
               </div>
             </div>
             <div className="p-6 space-y-6">

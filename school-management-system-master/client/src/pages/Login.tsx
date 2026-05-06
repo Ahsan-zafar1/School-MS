@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { Eye, EyeOff, GraduationCap } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSettings } from '../contexts/SettingsContext';
 import toast from 'react-hot-toast';
 
 interface LoginForm {
-  email: string;
+  emailOrUsername: string;
   password: string;
 }
 
@@ -14,6 +15,7 @@ const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
+  const { refreshSettings } = useSettings();
   const navigate = useNavigate();
 
   const {
@@ -25,7 +27,8 @@ const Login: React.FC = () => {
   const onSubmit = async (data: LoginForm) => {
     setIsLoading(true);
     try {
-      await login(data.email, data.password);
+      await login(data.emailOrUsername, data.password);
+      await refreshSettings();
       toast.success('Login successful!');
       navigate('/');
     } catch (error: any) {
@@ -52,28 +55,24 @@ const Login: React.FC = () => {
         <form className="mt-8 space-y-6" onSubmit={handleSubmit(onSubmit)}>
           <div className="rounded-md shadow-sm -space-y-px">
             <div>
-              <label htmlFor="email" className="sr-only">
-                Email address
+              <label htmlFor="emailOrUsername" className="sr-only">
+                Email or username
               </label>
               <input
-                {...register('email', {
-                  required: 'Email is required',
-                  pattern: {
-                    value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
-                    message: 'Invalid email address',
-                  },
+                {...register('emailOrUsername', {
+                  required: 'Email or username is required',
                 })}
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
+                id="emailOrUsername"
+                name="emailOrUsername"
+                type="text"
+                autoComplete="username"
                 className={`input-field rounded-t-lg ${
-                  errors.email ? 'border-red-500' : ''
+                  errors.emailOrUsername ? 'border-red-500' : ''
                 }`}
-                placeholder="Email address"
+                placeholder="Email or username"
               />
-              {errors.email && (
-                <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
+              {errors.emailOrUsername && (
+                <p className="mt-1 text-sm text-red-600">{errors.emailOrUsername.message}</p>
               )}
             </div>
             <div className="relative">
@@ -129,7 +128,10 @@ const Login: React.FC = () => {
               Admin: admin@school.com / admin123
             </p>
             <p className="text-sm text-gray-600">
-              Student: student@school.com / student123
+              Student: email or username / student123
+            </p>
+            <p className="text-xs text-gray-500">
+              No email? Use your Student ID or Teacher ID as username.
             </p>
           </div>
         </form>

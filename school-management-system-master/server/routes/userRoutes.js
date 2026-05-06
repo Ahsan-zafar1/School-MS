@@ -22,22 +22,29 @@ router.get('/', async (req, res) => {
 
 /**
  * POST /api/users
- * Create a new user (name, email, password, role). Admin only.
+ * Create a new user. Admin only. Requires: name, password, role. Login: email OR username (at least one).
  */
 router.post('/', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Name, email and password are required' });
+    const { name, email, username, password, role } = req.body;
+    if (!name || !password) {
+      return res.status(400).json({ message: 'Name and password are required' });
     }
-    const normalizedEmail = (email || '').trim().toLowerCase();
-    const existing = await User.findOne({ email: normalizedEmail });
-    if (existing) {
+    const em = (email || '').trim().toLowerCase() || null;
+    const un = (username || '').trim().toLowerCase() || null;
+    if (!em && !un) {
+      return res.status(400).json({ message: 'Email or username is required for login' });
+    }
+    if (em && (await User.findOne({ email: em }))) {
       return res.status(400).json({ message: 'User with this email already exists' });
+    }
+    if (un && (await User.findOne({ username: un }))) {
+      return res.status(400).json({ message: 'User with this username already exists' });
     }
     const user = await User.create({
       name: (name || '').trim(),
-      email: normalizedEmail,
+      email: em,
+      username: un,
       password: password,
       role: role || 'user'
     });
@@ -71,21 +78,33 @@ router.put('/:id/reset-password', async (req, res) => {
 
 /**
  * PUT /api/users/:id
- * Update user (name, email, role). Admin only. Does not change password.
+ * Update user (name, email, username, role). Admin only. Does not change password. At least one of email/username must remain.
  */
 router.put('/:id', async (req, res) => {
   try {
-    const { name, email, role } = req.body;
+    const { name, email, username, role } = req.body;
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (name !== undefined) user.name = name.trim();
     if (email !== undefined) {
-      const normalizedEmail = email.trim().toLowerCase();
-      const existing = await User.findOne({ email: normalizedEmail, _id: { $ne: req.params.id } });
-      if (existing) return res.status(400).json({ message: 'Email already in use' });
-      user.email = normalizedEmail;
+      const em = (email || '').trim().toLowerCase() || null;
+      if (em) {
+        const existing = await User.findOne({ email: em, _id: { $ne: req.params.id } });
+        if (existing) return res.status(400).json({ message: 'Email already in use' });
+      }
+      user.email = em;
+    }
+    if (username !== undefined) {
+      const un = (username || '').trim().toLowerCase() || null;
+      if (un) {
+        const existing = await User.findOne({ username: un, _id: { $ne: req.params.id } });
+        if (existing) return res.status(400).json({ message: 'Username already in use' });
+      }
+      user.username = un;
     }
     if (role !== undefined) user.role = role;
+    const hasLogin = (user.email != null && String(user.email).trim() !== '') || (user.username != null && String(user.username).trim() !== '');
+    if (!hasLogin) return res.status(400).json({ message: 'User must have email or username for login' });
     await user.save();
     const safe = user.toObject ? user.toObject() : user;
     delete safe.password;

@@ -4,7 +4,8 @@ import {
   Home, 
   Users, 
   GraduationCap, 
-  BookOpen, 
+  BookOpen,
+  BookMarked,
   FileText, 
   DollarSign, 
   Calendar, 
@@ -40,10 +41,12 @@ const Layout: React.FC = () => {
     { name: 'Students', href: '/students', icon: Users },
     { name: 'Teachers', href: '/teachers', icon: GraduationCap },
     { name: 'Classes', href: '/classes', icon: BookOpen },
+    { name: 'Subjects', href: '/subjects', icon: BookMarked },
     { name: 'Exams', href: '/exams', icon: FileText },
     { name: 'Results', href: '/results', icon: BarChart3 },
     { name: 'Fees', href: '/fees', icon: DollarSign },
     { name: 'Attendance', href: '/attendance', icon: Calendar },
+    { name: 'Announcements', href: '/announcements', icon: MessageCircle },
     { name: 'Reports', href: '/reports', icon: BarChart3 },
     { name: 'Settings', href: '/settings', icon: Settings },
   ];
@@ -55,15 +58,24 @@ const Layout: React.FC = () => {
     ...(studentPerms.showExams !== false ? [{ name: 'My Exams', href: '/my/exams', icon: FileText }] : []),
     ...(studentPerms.showResults !== false ? [{ name: 'My Results', href: '/my/results', icon: BarChart3 }] : []),
     ...(studentPerms.showAttendance !== false ? [{ name: 'My Attendance', href: '/my/attendance', icon: Calendar }] : []),
-    ...(studentPerms.showNotifications !== false ? [{ name: 'Notifications', href: '/my/notifications', icon: Bell }] : []),
+    ...(studentPerms.showNotifications !== false ? [{ name: 'Notifications & Announcements', href: '/my/notifications', icon: Bell }] : []),
   ];
 
   const teacherNavigation = [
     { name: 'Dashboard', href: '/', icon: Home },
     ...(teacherPerms.showProfile !== false ? [{ name: 'My Profile', href: '/my/profile', icon: User }] : []),
     ...(teacherPerms.showClasses !== false ? [{ name: 'My Classes', href: '/my/classes', icon: BookOpen }] : []),
-    ...(teacherPerms.showAttendance !== false ? [{ name: 'Attendance', href: '/my/attendance', icon: Calendar }] : []),
-    ...(teacherPerms.showExams !== false ? [{ name: 'Exams', href: '/my/exams', icon: FileText }] : []),
+    ...(teacherPerms.showAttendance !== false ? [
+      { name: 'Mark Attendance', href: '/my/mark-attendance', icon: Calendar },
+      { name: 'View Attendance', href: '/my/view-attendance', icon: Calendar },
+    ] : []),
+    ...(teacherPerms.showExams !== false ? [
+      { name: 'Exams', href: '/my/exams', icon: FileText },
+      { name: 'Exam Marks', href: '/my/exam-marks', icon: FileText },
+    ] : []),
+    { name: 'Schedule', href: '/my/schedule', icon: BookOpen },
+    { name: 'Announcements', href: '/my/announcements', icon: MessageCircle },
+    { name: 'Analytics', href: '/my/analytics', icon: BarChart3 },
     ...(teacherPerms.showNotifications !== false ? [{ name: 'Notifications', href: '/my/notifications', icon: Bell }] : []),
   ];
 
@@ -96,7 +108,13 @@ const Layout: React.FC = () => {
                 <p className="text-xs text-purple-200 dark:text-purple-300">Management System</p>
               </div>
             </div>
-            <button onClick={() => setSidebarOpen(false)} className="text-white hover:text-purple-200 dark:hover:text-purple-300">
+            <button
+              type="button"
+              title="Close menu"
+              aria-label="Close menu"
+              onClick={() => setSidebarOpen(false)}
+              className="text-white hover:text-purple-200 dark:hover:text-purple-300"
+            >
               <X className="h-6 w-6" />
             </button>
           </div>
@@ -174,7 +192,9 @@ const Layout: React.FC = () => {
         <div className="sticky top-0 z-40 flex h-20 shrink-0 items-center gap-x-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 transition-colors duration-200">
           <button
             type="button"
-            className="-m-2.5 p-2.5 text-gray-700 lg:hidden"
+            title="Open navigation menu"
+            aria-label="Open navigation menu"
+            className="-m-2.5 p-2.5 text-gray-700 lg:hidden dark:text-gray-200"
             onClick={() => setSidebarOpen(true)}
           >
             <Menu className="h-6 w-6" />
@@ -199,19 +219,31 @@ const Layout: React.FC = () => {
 
           {/* Right Icons */}
           <div className="flex items-center gap-x-4">
-            <button className="relative p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">
+            <button
+              type="button"
+              title="Messages"
+              aria-label="Messages"
+              className="relative p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            >
               <MessageCircle className="h-5 w-5" />
               <span className="absolute top-1 right-1 h-2 w-2 bg-purple-600 rounded-full"></span>
             </button>
-            <button className="relative p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">
+            <button
+              type="button"
+              title="Notifications"
+              aria-label="Notifications"
+              className="relative p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            >
               <Bell className="h-5 w-5" />
               <span className="absolute top-1 right-1 h-2 w-2 bg-purple-600 rounded-full"></span>
             </button>
             {/* Theme Toggle Button - Fancy Design */}
             <button
+              type="button"
               onClick={toggleTheme}
               className="relative p-2.5 bg-gradient-to-br from-purple-500 to-purple-600 dark:from-yellow-400 dark:to-yellow-500 hover:from-purple-600 hover:to-purple-700 dark:hover:from-yellow-500 dark:hover:to-yellow-600 text-white rounded-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 group"
               title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             >
               <div className="relative w-5 h-5">
                 <Sun className={`h-5 w-5 absolute transition-all duration-300 ${theme === 'light' ? 'rotate-0 opacity-100 scale-100' : 'rotate-90 opacity-0 scale-0'}`} />
@@ -229,9 +261,11 @@ const Layout: React.FC = () => {
               </div>
             </div>
             <button
+              type="button"
               onClick={handleLogout}
               className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-              title="Logout"
+              title="Log out of your account"
+              aria-label="Log out"
             >
               <LogOut className="h-5 w-5" />
             </button>

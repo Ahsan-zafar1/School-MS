@@ -4,7 +4,8 @@ import api from '../utils/api';
 interface User {
   _id: string;
   name: string;
-  email: string;
+  email?: string;
+  username?: string;
   role: 'admin' | 'teacher' | 'student';
   isActive: boolean;
 }
@@ -12,7 +13,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (emailOrUsername: string, password: string) => Promise<void>;
   logout: () => void;
   loading: boolean;
 }
@@ -56,21 +57,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const login = async (email: string, password: string) => {
+  const login = async (emailOrUsername: string, password: string) => {
     try {
-      const response = await api.post('/api/auth/login', { email, password });
+      const value = (emailOrUsername || '').trim();
+      const body = value.includes('@')
+        ? { email: value, password }
+        : { username: value, password };
+      const response = await api.post('/api/auth/login', body);
       const payload = response.data;
       const data = payload?.data ?? payload;
       const token = data?.token;
       if (!token) throw new Error('No token received');
-      localStorage.setItem('token', token);
       setUser({
         _id: data._id ?? data.id,
         name: data.name,
         email: data.email,
+        username: data.username,
         role: data.role ?? 'student',
         isActive: true
       });
+      localStorage.setItem('token', token);
     } catch (error: any) {
       const msg = error.response?.data?.message || error.message || 'Login failed';
       throw new Error(msg);

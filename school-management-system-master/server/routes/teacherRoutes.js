@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Teacher = require('../models/Teacher');
 const { protect } = require('../middleware/auth');
+const { createPortalUserForTeacher } = require('../helpers/createPortalUser');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -10,6 +11,7 @@ const csvParser = require('csv-parser');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
+const { searchRegexFromQuery, pickSortField, TEACHER_LIST_SORT } = require('../utils/queryHelpers');
 const multerCsv = multer({ dest: 'tmp/csv/' });
 const multerExcel = multer({ 
   dest: 'tmp/excel/',
@@ -112,7 +114,7 @@ router.get('/', protect, async (req, res) => {
     const skip = (page - 1) * limit;
 
     // Sorting parameters
-    const sortBy = req.query.sortBy || 'createdAt';
+    const sortBy = pickSortField(req.query.sortBy, TEACHER_LIST_SORT, 'createdAt');
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortBy]: sortOrder };
 
@@ -121,14 +123,16 @@ router.get('/', protect, async (req, res) => {
 
     // Search filter (name, email, teacherId, subject)
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      filter.$or = [
-        { name: searchRegex },
-        { email: searchRegex },
-        { teacherId: searchRegex },
-        { subject: searchRegex },
-        { qualification: searchRegex }
-      ];
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        filter.$or = [
+          { name: searchRegex },
+          { email: searchRegex },
+          { teacherId: searchRegex },
+          { subject: searchRegex },
+          { qualification: searchRegex }
+        ];
+      }
     }
 
     // Subject filter
@@ -138,7 +142,8 @@ router.get('/', protect, async (req, res) => {
 
     // Tracking ID filter
     if (req.query.trackingId) {
-      filter.teacherId = new RegExp(req.query.trackingId, 'i');
+      const tr = searchRegexFromQuery(req.query.trackingId);
+      if (tr) filter.teacherId = tr;
     }
 
     // Status filter
@@ -213,13 +218,15 @@ router.get('/export', protect, async (req, res) => {
     
     // Apply filters if provided
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      query.$or = [
-        { name: searchRegex },
-        { email: searchRegex },
-        { teacherId: searchRegex },
-        { subject: searchRegex }
-      ];
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        query.$or = [
+          { name: searchRegex },
+          { email: searchRegex },
+          { teacherId: searchRegex },
+          { subject: searchRegex }
+        ];
+      }
     }
     
     if (req.query.subject) {
@@ -362,13 +369,15 @@ router.get('/export', protect, async (req, res) => {
     
     // Apply filters if provided
     if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, 'i');
-      query.$or = [
-        { name: searchRegex },
-        { email: searchRegex },
-        { teacherId: searchRegex },
-        { subject: searchRegex }
-      ];
+      const searchRegex = searchRegexFromQuery(req.query.search);
+      if (searchRegex) {
+        query.$or = [
+          { name: searchRegex },
+          { email: searchRegex },
+          { teacherId: searchRegex },
+          { subject: searchRegex }
+        ];
+      }
     }
     
     if (req.query.subject) {
@@ -558,9 +567,20 @@ router.post('/', protect, upload.single('photo'), handleMulterError, async (req,
     console.log('Teacher data to create:', teacherData);
 
     const teacher = await Teacher.create(teacherData);
+
+    // Auto-create portal login user for this teacher (email or username = teacherId)
+    const portalResult = await createPortalUserForTeacher(teacher);
+    if (portalResult.created) {
+      console.log('Portal user created for teacher:', teacher.name, '| Login:', teacher.email || teacher.teacherId);
+    } else {
+      console.log('Portal user for teacher:', teacher.name, '—', portalResult.message);
+    }
+
     res.status(201).json({
       success: true,
-      data: teacher
+      data: teacher,
+      portalUserCreated: portalResult.created,
+      portalLogin: portalResult.created ? (teacher.email || teacher.teacherId) : undefined
     });
   } catch (error) {
     // If there's an error, delete the uploaded file if it exists
@@ -600,11 +620,37 @@ router.post('/', protect, upload.single('photo'), handleMulterError, async (req,
   }
 });
 
+// Create portal login user for an existing teacher (e.g. added before auto-create was enabled)
+router.post('/:id/create-portal-user', protect, async (req, res) => {
+  try {
+    const teacher = await Teacher.findById(req.params.id).lean();
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+    const result = await createPortalUserForTeacher(teacher);
+    if (result.created) {
+      return res.status(201).json({
+        success: true,
+        message: result.message,
+        login: teacher.email || teacher.teacherId,
+        password: 'teacher123'
+      });
+    }
+    return res.status(200).json({
+      success: false,
+      message: result.message
+    });
+  } catch (err) {
+    console.error('Create portal user error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to create portal user' });
+  }
+});
+
 // Update teacher with file upload
 router.put('/:id', protect, upload.single('photo'), handleMulterError, async (req, res) => {
   try {
     console.log('Request body:', req.body);
-    
+
     const teacher = await Teacher.findById(req.params.id);
     if (!teacher) {
       return res.status(404).json({
